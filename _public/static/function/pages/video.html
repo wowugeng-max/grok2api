@@ -26,6 +26,15 @@
           <p class="text-[var(--accents-4)] mt-1 text-sm" data-i18n="video.subtitle">生成短视频，支持参考图与多种预设风格。</p>
         </div>
         <div class="video-actions">
+          <button id="retryBtn" class="geist-button-outline gap-2" disabled>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="23 4 23 10 17 10"></polyline>
+              <polyline points="1 20 1 14 7 14"></polyline>
+              <path d="M3.51 9a9 9 0 0 1 14.13-3.36L23 10M1 14l5.36 4.36A9 9 0 0 0 20.49 15"></path>
+            </svg>
+            <span>重试上次</span>
+          </button>
           <button id="startBtn" class="geist-button gap-2">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
               stroke-linecap="round" stroke-linejoin="round">
@@ -57,7 +66,7 @@
             <div class="settings-block ref-block">
               <label class="field-label" for="imageUrlInput" data-i18n="video.referenceImage">参考图</label>
               <div class="ref-controls">
-                <textarea id="imageUrlInput" class="geist-input ref-textarea" placeholder="每行一个 https://... 或 data:image/...，最多 7 张" data-i18n-placeholder="video.referenceImagePlaceholder"></textarea>
+                <textarea id="imageUrlInput" class="geist-input ref-textarea" placeholder="每行一个 https://... 或 data:image/...，最多 7 张（也可直接上传）" data-i18n-placeholder="video.referenceImagePlaceholder"></textarea>
               </div>
               <div class="ref-meta">
                 <span id="imageFileName" class="ref-name" data-i18n="video.noReferenceSelected">未选择参考图</span>
@@ -135,6 +144,32 @@
             <div class="meta-item">
               <div class="meta-label" data-i18n="video.metaPreset">预设</div>
               <div id="presetValue" class="meta-value">-</div>
+            </div>
+            <div class="meta-item">
+              <div class="meta-label">TTFP</div>
+              <div id="ttfpValue" class="meta-value">-</div>
+            </div>
+            <div class="meta-item">
+              <div class="meta-label">TTFR</div>
+              <div id="ttfrValue" class="meta-value">-</div>
+            </div>
+            <div class="meta-item">
+              <div class="meta-label">Total</div>
+              <div id="totalValue" class="meta-value">-</div>
+            </div>
+          </div>
+          <div class="mt-3">
+            <div class="flex items-center justify-between gap-2">
+              <div class="meta-label">失败原因 Top</div>
+              <label class="text-xs text-[var(--accents-4)] flex items-center gap-1">
+                <input id="videoSmartRetryToggle" type="checkbox" checked>
+                <span>智能重试</span>
+              </label>
+            </div>
+            <div id="videoErrorTop" class="text-xs text-[var(--accents-4)] mt-1">-</div>
+            <div class="flex gap-2 mt-2">
+              <button id="videoErrorClearBtn" class="geist-button-outline text-xs px-3" type="button">清空统计</button>
+              <button id="videoErrorExportBtn" class="geist-button-outline text-xs px-3" type="button">导出 JSON</button>
             </div>
           </div>
         </div>

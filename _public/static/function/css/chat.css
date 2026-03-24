@@ -99,6 +99,29 @@ body {
   gap: 4px;
 }
 
+.message-meta {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--accents-4);
+}
+
+.message-meta.sending,
+.message-meta.streaming {
+  color: #b45309;
+}
+
+.message-meta.done {
+  color: #0f766e;
+}
+
+.message-meta.error {
+  color: #b91c1c;
+}
+
+.message-meta.hidden {
+  display: none;
+}
+
 .message-row.user {
   align-items: flex-end;
 }

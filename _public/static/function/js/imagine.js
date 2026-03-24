@@ -16,6 +16,12 @@
   const countValue = document.getElementById('countValue');
   const activeValue = document.getElementById('activeValue');
   const latencyValue = document.getElementById('latencyValue');
+  const imagineTtfpValue = document.getElementById('imagineTtfpValue');
+  const imagineTtffValue = document.getElementById('imagineTtffValue');
+  const imagineTotalValue = document.getElementById('imagineTotalValue');
+  const imagineErrorTop = document.getElementById('imagineErrorTop');
+  const imagineErrorClearBtn = document.getElementById('imagineErrorClearBtn');
+  const imagineErrorExportBtn = document.getElementById('imagineErrorExportBtn');
   const modeButtons = document.querySelectorAll('.mode-btn');
   const waterfall = document.getElementById('waterfall');
   const emptyState = document.getElementById('emptyState');
@@ -42,6 +48,10 @@
   let streamSequence = 0;
   const streamImageMap = new Map();
   let finalMinBytesDefault = 100000;
+  let imagineStartAt = 0;
+  let imagineFirstPreviewAt = 0;
+  let imagineFirstFinalAt = 0;
+  const imagineErrorStats = new Map();
 
   function toast(message, type) {
     if (typeof showToast === 'function') {
@@ -528,6 +538,72 @@
     }
   }
 
+  function normalizeImagineErrorKey(detail) {
+    const text = String(detail || '').toLowerCase();
+    if (text.includes('审查') || text.includes('blocked') || text.includes('moderated')) return '内容审查/拦截';
+    if (text.includes('timeout') || text.includes('超时') || text.includes('idle')) return '上游超时';
+    if (text.includes('rate') || text.includes('限流') || text.includes('429')) return '限流/号池繁忙';
+    if (text.includes('reference') || text.includes('@图') || text.includes('placeholder')) return '参考图参数错误';
+    return '其他错误';
+  }
+
+  function renderImagineErrorTop() {
+    if (!imagineErrorTop) return;
+    if (!imagineErrorStats.size) {
+      imagineErrorTop.textContent = '-';
+      return;
+    }
+    const top = [...imagineErrorStats.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([k, v]) => `${k} (${v})`)
+      .join(' · ');
+    imagineErrorTop.textContent = top;
+  }
+
+  function exportImagineErrorStats() {
+    const payload = {
+      generated_at: new Date().toISOString(),
+      stats: [...imagineErrorStats.entries()].map(([reason, count]) => ({ reason, count }))
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'imagine_error_stats.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function recordImagineError(detail) {
+    const key = normalizeImagineErrorKey(detail);
+    imagineErrorStats.set(key, (imagineErrorStats.get(key) || 0) + 1);
+    renderImagineErrorTop();
+  }
+
+  function setImagineStage(stage, detail) {
+    const stageMap = {
+      queued: t('common.connecting'),
+      generating: t('common.generating'),
+      retrying: t('video.retrying') || '正在重试',
+      recovering: t('video.recovering') || '正在恢复生成',
+      upscaling: t('video.superResolutionInProgress'),
+      finalizing: t('video.finalizing') || '正在整理结果',
+      completed: t('common.done'),
+      failed: t('common.generationFailed')
+    };
+    const label = detail || stageMap[stage] || stage;
+    if (stage === 'failed') {
+      setStatus('error', label);
+      toast(label, 'error');
+      recordImagineError(label);
+      return;
+    }
+    setStatus('connected', label);
+  }
+
   function handleMessage(raw) {
     let data = null;
     try {
@@ -537,6 +613,11 @@
     }
     if (!data || typeof data !== 'object') return;
 
+    if (data.type === 'image_generation.stage') {
+      setImagineStage(data.stage, data.detail);
+      return;
+    }
+
     if (data.type === 'image_generation.partial_image' || data.type === 'image_generation.completed') {
       const imageId = data.image_id || data.imageId;
       const payload = data.b64_json || data.url || data.image;
@@ -544,6 +625,22 @@
         return;
       }
       const isFinal = data.type === 'image_generation.completed' || data.stage === 'final';
+      if (!imagineFirstPreviewAt) {
+        imagineFirstPreviewAt = Date.now();
+        if (imagineStartAt) {
+          const ttfp = imagineFirstPreviewAt - imagineStartAt;
+          console.log('[imagine] TTFP(ms):', ttfp);
+          if (imagineTtfpValue) imagineTtfpValue.textContent = `${ttfp} ms`;
+        }
+      }
+      if (isFinal && !imagineFirstFinalAt) {
+        imagineFirstFinalAt = Date.now();
+        if (imagineStartAt) {
+          const ttff = imagineFirstFinalAt - imagineStartAt;
+          console.log('[imagine] TTFF(ms):', ttff);
+          if (imagineTtffValue) imagineTtffValue.textContent = `${ttff} ms`;
+        }
+      }
       upsertStreamImage(payload, data, imageId, isFinal);
     } else if (data.type === 'image') {
       imageCount += 1;
@@ -560,6 +657,11 @@
           return;
         }
         setStatus('', t('common.stopped'));
+        if (imagineStartAt) {
+          const totalMs = Date.now() - imagineStartAt;
+          console.log('[imagine] total(ms):', totalMs);
+          if (imagineTotalValue) imagineTotalValue.textContent = `${totalMs} ms`;
+        }
       }
     } else if (data.type === 'error' || data.error) {
       const message = data.message || (data.error && data.error.message) || t('common.generationFailed');
@@ -569,6 +671,7 @@
       }
       updateError(message);
       toast(message, 'error');
+      recordImagineError(message);
     }
   }
 
@@ -686,6 +789,12 @@
     }
 
     isRunning = true;
+    imagineStartAt = Date.now();
+    imagineFirstPreviewAt = 0;
+    imagineFirstFinalAt = 0;
+    if (imagineTtfpValue) imagineTtfpValue.textContent = '-';
+    if (imagineTtffValue) imagineTtffValue.textContent = '-';
+    if (imagineTotalValue) imagineTotalValue.textContent = '-';
     setStatus('connecting', t('common.connecting'));
     startBtn.disabled = true;
 
@@ -1253,6 +1362,20 @@
 
   // Make floating actions draggable
   const floatingActions = document.getElementById('floatingActions');
+  if (imagineErrorClearBtn) {
+    imagineErrorClearBtn.addEventListener('click', () => {
+      imagineErrorStats.clear();
+      renderImagineErrorTop();
+      toast('已清空失败统计', 'warning');
+    });
+  }
+
+  if (imagineErrorExportBtn) {
+    imagineErrorExportBtn.addEventListener('click', () => {
+      exportImagineErrorStats();
+    });
+  }
+
   if (floatingActions) {
     let isDragging = false;
     let startX, startY, initialLeft, initialTop;

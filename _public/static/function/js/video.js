@@ -2,6 +2,7 @@
   const startBtn = document.getElementById('startBtn');
   const stopBtn = document.getElementById('stopBtn');
   const clearBtn = document.getElementById('clearBtn');
+  const retryBtn = document.getElementById('retryBtn');
   const promptInput = document.getElementById('promptInput');
   const imageUrlInput = document.getElementById('imageUrlInput');
   const imageFileInput = document.getElementById('imageFileInput');
@@ -17,12 +18,19 @@
   const progressFill = document.getElementById('progressFill');
   const progressText = document.getElementById('progressText');
   const durationValue = document.getElementById('durationValue');
+  const ttfpValue = document.getElementById('ttfpValue');
+  const ttfrValue = document.getElementById('ttfrValue');
+  const totalValue = document.getElementById('totalValue');
   const aspectValue = document.getElementById('aspectValue');
   const lengthValue = document.getElementById('lengthValue');
   const resolutionValue = document.getElementById('resolutionValue');
   const presetValue = document.getElementById('presetValue');
   const videoEmpty = document.getElementById('videoEmpty');
   const videoStage = document.getElementById('videoStage');
+  const videoErrorTop = document.getElementById('videoErrorTop');
+  const videoErrorClearBtn = document.getElementById('videoErrorClearBtn');
+  const videoErrorExportBtn = document.getElementById('videoErrorExportBtn');
+  const videoSmartRetryToggle = document.getElementById('videoSmartRetryToggle');
 
   let currentSource = null;
   let currentTaskId = '';
@@ -36,6 +44,10 @@
   let lastProgress = 0;
   let currentPreviewItem = null;
   let previewCount = 0;
+  let firstProgressAt = 0;
+  let firstRenderableAt = 0;
+  let lastRequestSnapshot = null;
+  const videoErrorStats = new Map();
   const DEFAULT_REASONING_EFFORT = 'low';
   const MAX_REFERENCE_IMAGES = 7;
 
@@ -68,6 +80,14 @@
 
   function updateProgress(value) {
     const safe = Math.max(0, Math.min(100, Number(value) || 0));
+    if (!firstProgressAt && safe > 0) {
+      firstProgressAt = Date.now();
+      if (startAt) {
+        const ttfp = firstProgressAt - startAt;
+        console.log('[video] TTFP(ms):', ttfp);
+        if (ttfpValue) ttfpValue.textContent = `${ttfp} ms`;
+      }
+    }
     lastProgress = safe;
     if (progressFill) {
       progressFill.style.width = `${safe}%`;
@@ -100,6 +120,9 @@
     currentPreviewItem = null;
     updateProgress(0);
     setIndeterminate(false);
+    if (ttfpValue) ttfpValue.textContent = '-';
+    if (ttfrValue) ttfrValue.textContent = '-';
+    if (totalValue) totalValue.textContent = '-';
     if (!keepPreview) {
       if (videoStage) {
         videoStage.innerHTML = '';
@@ -289,24 +312,29 @@
     return `${base}?${params.toString()}`;
   }
 
-  async function createVideoTask(authHeader) {
+  function buildRequestPayload() {
     const prompt = promptInput ? promptInput.value.trim() : '';
     const imageUrls = getReferenceImages();
+    return {
+      prompt,
+      image_urls: imageUrls,
+      reasoning_effort: DEFAULT_REASONING_EFFORT,
+      aspect_ratio: ratioSelect ? ratioSelect.value : '3:2',
+      video_length: lengthSelect ? parseInt(lengthSelect.value, 10) : 6,
+      resolution_name: resolutionSelect ? resolutionSelect.value : '480p',
+      preset: presetSelect ? presetSelect.value : 'normal'
+    };
+  }
+
+  async function createVideoTask(authHeader, payloadOverride) {
+    const payload = payloadOverride || buildRequestPayload();
     const res = await fetch('/v1/function/video/start', {
       method: 'POST',
       headers: {
         ...buildAuthHeaders(authHeader),
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-        prompt,
-        image_urls: imageUrls,
-        reasoning_effort: DEFAULT_REASONING_EFFORT,
-        aspect_ratio: ratioSelect ? ratioSelect.value : '3:2',
-        video_length: lengthSelect ? parseInt(lengthSelect.value, 10) : 6,
-        resolution_name: resolutionSelect ? resolutionSelect.value : '480p',
-        preset: presetSelect ? presetSelect.value : 'normal'
-      })
+      body: JSON.stringify(payload)
     });
     if (!res.ok) {
       const text = await res.text();
@@ -360,6 +388,14 @@
     if (!container) return;
     const body = container.querySelector('.video-item-body');
     if (!body) return;
+    if (!firstRenderableAt) {
+      firstRenderableAt = Date.now();
+      if (startAt) {
+        const ttfr = firstRenderableAt - startAt;
+        console.log('[video] TTFR(ms):', ttfr);
+        if (ttfrValue) ttfrValue.textContent = `${ttfr} ms`;
+      }
+    }
     body.innerHTML = html;
     const videoEl = body.querySelector('video');
     let videoUrl = '';
@@ -382,8 +418,115 @@
     const safeUrl = url || '';
     const body = container.querySelector('.video-item-body');
     if (!body) return;
+    if (!firstRenderableAt) {
+      firstRenderableAt = Date.now();
+      if (startAt) {
+        const ttfr = firstRenderableAt - startAt;
+        console.log('[video] TTFR(ms):', ttfr);
+        if (ttfrValue) ttfrValue.textContent = `${ttfr} ms`;
+      }
+    }
     body.innerHTML = `\n      <video controls preload="metadata">\n        <source src="${safeUrl}" type="video/mp4">\n      </video>\n    `;
     updateItemLinks(container, safeUrl);
+  }
+
+  function mapStageLabel(stage) {
+    const map = {
+      queued: t('common.connecting'),
+      generating: t('common.generating'),
+      recovering: t('video.recovering') || '正在恢复生成',
+      retrying: t('video.retrying') || '正在重试',
+      upscaling: t('video.superResolutionInProgress'),
+      finalizing: t('video.finalizing') || '正在整理结果',
+      completed: t('common.done'),
+      failed: t('common.generationFailed')
+    };
+    return map[stage] || stage;
+  }
+
+  function normalizeVideoErrorKey(detail) {
+    const text = String(detail || '').toLowerCase();
+    if (text.includes('审查') || text.includes('blocked') || text.includes('moderated')) return '内容审查/拦截';
+    if (text.includes('timeout') || text.includes('超时') || text.includes('idle')) return '上游超时';
+    if (text.includes('rate') || text.includes('限流') || text.includes('429')) return '限流/号池繁忙';
+    if (text.includes('reference') || text.includes('@图') || text.includes('placeholder')) return '参考图参数错误';
+    return '其他错误';
+  }
+
+  function recordVideoError(detail) {
+    const key = normalizeVideoErrorKey(detail);
+    videoErrorStats.set(key, (videoErrorStats.get(key) || 0) + 1);
+    renderVideoErrorTop();
+  }
+
+  function renderVideoErrorTop() {
+    if (!videoErrorTop) return;
+    if (!videoErrorStats.size) {
+      videoErrorTop.textContent = '-';
+      return;
+    }
+    const top = [...videoErrorStats.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([k, v]) => `${k} (${v})`)
+      .join(' · ');
+    videoErrorTop.textContent = top;
+  }
+
+  function showRoundProgress(round, total, progress) {
+    setIndeterminate(false);
+    updateProgress(progress);
+    if (progressText && Number.isFinite(round) && Number.isFinite(total) && total > 0) {
+      progressText.textContent = `${Math.round(progress)}% · ${round}/${total}`;
+    }
+  }
+
+  function handleVideoStageEvent(payload) {
+    if (!payload || typeof payload !== 'object') return;
+    const stage = payload.stage || '';
+    const detail = payload.detail || '';
+    const label = mapStageLabel(stage);
+
+    if (stage === 'failed') {
+      const errText = detail || label;
+      setStatus('error', errText);
+      toast(errText, 'error');
+      recordVideoError(errText);
+      return;
+    }
+
+    if (stage === 'upscaling' || stage === 'queued' || stage === 'finalizing') {
+      setIndeterminate(true);
+      if (progressText) {
+        progressText.textContent = label;
+      }
+    }
+
+    setStatus('connected', detail || label);
+  }
+
+  function handleVideoRoundEvent(payload) {
+    if (!payload || typeof payload !== 'object') return;
+    const stage = payload.stage || '';
+    const round = Number(payload.round_index || 0);
+    const total = Number(payload.round_total || 0);
+    if (stage === 'round_start') {
+      if (progressText && round > 0 && total > 0) {
+        progressText.textContent = `0% · ${round}/${total}`;
+      }
+      setIndeterminate(false);
+      return;
+    }
+    if (stage === 'round_progress') {
+      const p = Number(payload.progress || 0);
+      showRoundProgress(round, total, p);
+      return;
+    }
+    if (stage === 'round_done') {
+      if (progressText && round > 0 && total > 0) {
+        progressText.textContent = `100% · ${round}/${total}`;
+      }
+    }
   }
 
   function handleDelta(text) {
@@ -467,8 +610,9 @@
     }
   }
 
-  async function startConnection() {
-    const prompt = promptInput ? promptInput.value.trim() : '';
+  async function startConnection(payloadOverride) {
+    const payload = payloadOverride || buildRequestPayload();
+    const prompt = payload.prompt ? String(payload.prompt).trim() : '';
     if (!prompt) {
       toast(t('common.enterPrompt'), 'error');
       return;
@@ -491,11 +635,15 @@
     updateMeta();
     resetOutput(true);
     initPreviewSlot();
+    firstProgressAt = 0;
+    firstRenderableAt = 0;
     setStatus('connecting', t('common.connecting'));
 
     let taskId = '';
     try {
-      taskId = await createVideoTask(authHeader);
+      taskId = await createVideoTask(authHeader, payload);
+      lastRequestSnapshot = JSON.parse(JSON.stringify(payload));
+      if (retryBtn) retryBtn.disabled = false;
     } catch (e) {
       setStatus('error', t('common.createTaskFailed'));
       startBtn.disabled = false;
@@ -533,8 +681,9 @@
         return;
       }
       if (payload && payload.error) {
-        toast(payload.error, 'error');
-        setStatus('error', t('common.generationFailed'));
+        const msg = payload.error.message || payload.error || t('common.generationFailed');
+        toast(msg, 'error');
+        setStatus('error', msg);
         finishRun(true);
         return;
       }
@@ -547,6 +696,26 @@
         finishRun();
       }
     };
+
+    es.addEventListener('video_generation.stage', (event) => {
+      if (!event || !event.data) return;
+      try {
+        const payload = JSON.parse(event.data);
+        handleVideoStageEvent(payload);
+      } catch (e) {
+        // ignore
+      }
+    });
+
+    es.addEventListener('video_generation.round', (event) => {
+      if (!event || !event.data) return;
+      try {
+        const payload = JSON.parse(event.data);
+        handleVideoRoundEvent(payload);
+      } catch (e) {
+        // ignore
+      }
+    });
 
     es.onerror = () => {
       if (!isRunning) return;
@@ -574,13 +743,19 @@
     isRunning = false;
     setButtons(false);
     stopElapsedTimer();
+    const now = Date.now();
     if (!hasError) {
       setStatus('connected', t('common.done'));
       setIndeterminate(false);
       updateProgress(100);
+      if (startAt) {
+        const totalMs = now - startAt;
+        console.log('[video] total(ms):', totalMs);
+        if (totalValue) totalValue.textContent = `${totalMs} ms`;
+      }
     }
     if (durationValue && startAt) {
-      const seconds = Math.max(0, Math.round((Date.now() - startAt) / 1000));
+      const seconds = Math.max(0, Math.round((now - startAt) / 1000));
       durationValue.textContent = t('video.elapsedTime', { sec: seconds });
     }
   }
@@ -589,12 +764,68 @@
     startBtn.addEventListener('click', () => startConnection());
   }
 
+  function buildSmartRetryPayload() {
+    if (!lastRequestSnapshot) return null;
+    const p = JSON.parse(JSON.stringify(lastRequestSnapshot));
+    if (p.resolution_name === '720p') {
+      p.resolution_name = '480p';
+    } else {
+      const len = Number(p.video_length || 6);
+      p.video_length = Math.max(6, Math.min(30, len > 10 ? 10 : len));
+    }
+    return p;
+  }
+
+  if (retryBtn) {
+    retryBtn.addEventListener('click', () => {
+      const smart = buildSmartRetryPayload();
+      if (!smart) {
+        toast('暂无可重试的请求', 'warning');
+        return;
+      }
+      const smartEnabled = !videoSmartRetryToggle || videoSmartRetryToggle.checked;
+      if (!smartEnabled) {
+        toast('已按原参数重试', 'warning');
+        startConnection(lastRequestSnapshot);
+        return;
+      }
+      toast('已启用智能重试：优先降分辨率/时长', 'warning');
+      startConnection(smart);
+    });
+  }
+
   if (stopBtn) {
     stopBtn.addEventListener('click', () => stopConnection());
   }
 
   if (clearBtn) {
     clearBtn.addEventListener('click', () => resetOutput());
+  }
+
+  if (videoErrorClearBtn) {
+    videoErrorClearBtn.addEventListener('click', () => {
+      videoErrorStats.clear();
+      renderVideoErrorTop();
+      toast('已清空失败统计', 'warning');
+    });
+  }
+
+  if (videoErrorExportBtn) {
+    videoErrorExportBtn.addEventListener('click', () => {
+      const payload = {
+        generated_at: new Date().toISOString(),
+        stats: [...videoErrorStats.entries()].map(([reason, count]) => ({ reason, count }))
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'video_error_stats.json';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    });
   }
 
   if (videoStage) {

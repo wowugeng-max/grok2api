@@ -978,6 +978,7 @@
     // 从该位置重新发送
     const sendSessionId = sessionsData.activeId;
     const assistantEntry = createMessage('assistant', '');
+    setMessageMeta(assistantEntry, t('common.sending'), 'sending');
     setSendingState(true);
     setStatus('connecting', t('common.sending'));
 
@@ -1004,6 +1005,7 @@
       } catch (e) {
         if (e && e.name === 'AbortError') {
           updateMessage(assistantEntry, assistantEntry.raw || t('common.stopped'), true);
+          setMessageMeta(assistantEntry, '已停止', 'error');
           setStatus('error', t('common.stopped'));
           if (!assistantEntry.committed) {
             assistantEntry.committed = true;
@@ -1011,6 +1013,7 @@
           }
         } else {
           updateMessage(assistantEntry, t('chat.requestFailedStatus', { status: e.message || e }), true);
+          setMessageMeta(assistantEntry, '发送失败', 'error');
           setStatus('error', t('common.failed'));
           toast(t('chat.requestFailedCheck'), 'error');
         }
@@ -1034,6 +1037,11 @@
     contentNode.className = 'message-content';
     contentNode.textContent = content || '';
     bubble.appendChild(contentNode);
+
+    const metaNode = document.createElement('div');
+    metaNode.className = 'message-meta hidden';
+    bubble.appendChild(metaNode);
+
     row.appendChild(bubble);
 
     chatLog.appendChild(row);
@@ -1041,6 +1049,7 @@
     const entry = {
       row,
       contentNode,
+      metaNode,
       role,
       raw: content || '',
       committed: false,
@@ -1172,6 +1181,18 @@
       if (!container.querySelector || !container.querySelector('img')) return;
       wrapImagesInContainer(container);
     });
+  }
+
+  function setMessageMeta(entry, text, state) {
+    if (!entry || !entry.metaNode) return;
+    const value = String(text || '').trim();
+    if (!value) {
+      entry.metaNode.textContent = '';
+      entry.metaNode.className = 'message-meta hidden';
+      return;
+    }
+    entry.metaNode.textContent = value;
+    entry.metaNode.className = `message-meta ${state || ''}`.trim();
   }
 
   function updateMessage(entry, content, finalize = false) {
@@ -1488,6 +1509,7 @@
     const historySlice = messageHistory.slice(0, lastUserIndex + 1);
     const retrySessionId = sessionsData.activeId;
     const assistantEntry = createMessage('assistant', '');
+    setMessageMeta(assistantEntry, t('common.sending'), 'sending');
     setSendingState(true);
     setStatus('connecting', t('common.sending'));
 
@@ -1571,6 +1593,7 @@
 
     const sendSessionId = sessionsData.activeId;
     const assistantEntry = createMessage('assistant', '');
+    setMessageMeta(assistantEntry, t('common.sending'), 'sending');
     setSendingState(true);
     setStatus('connecting', t('common.sending'));
 
@@ -1669,6 +1692,8 @@
               const elapsed = assistantEntry.thinkElapsed || Math.max(1, Math.round((Date.now() - assistantEntry.startedAt) / 1000));
               updateThinkSummary(assistantEntry, elapsed);
             }
+            const totalMs = Math.max(0, Date.now() - assistantEntry.startedAt);
+            setMessageMeta(assistantEntry, `完成 · 总耗时 ${totalMs}ms`, 'done');
             assistantEntry.committed = true;
             commitToSession(targetSessionId, assistantText);
             return;
@@ -1682,6 +1707,8 @@
               assistantText += delta;
               if (!assistantEntry.firstTokenAt) {
                 assistantEntry.firstTokenAt = Date.now();
+                const ttfbMs = Math.max(0, assistantEntry.firstTokenAt - assistantEntry.startedAt);
+                setMessageMeta(assistantEntry, `首字耗时 ${ttfbMs}ms · 回复中`, 'streaming');
               }
               if (!assistantEntry.hasThink && assistantText.includes('<think>')) {
                 assistantEntry.hasThink = true;
@@ -1710,6 +1737,8 @@
       const elapsed = assistantEntry.thinkElapsed || Math.max(1, Math.round((Date.now() - assistantEntry.startedAt) / 1000));
       updateThinkSummary(assistantEntry, elapsed);
     }
+    const totalMs = Math.max(0, Date.now() - assistantEntry.startedAt);
+    setMessageMeta(assistantEntry, `完成 · 总耗时 ${totalMs}ms`, 'done');
     assistantEntry.committed = true;
     commitToSession(targetSessionId, assistantText);
     } finally {

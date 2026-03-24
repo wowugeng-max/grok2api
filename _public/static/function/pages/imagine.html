@@ -160,6 +160,26 @@
               <div class="meta-label" data-i18n="imagine.avgTime">平均耗时</div>
               <div id="latencyValue" class="meta-value">-</div>
             </div>
+            <div class="meta-item">
+              <div class="meta-label">TTFP</div>
+              <div id="imagineTtfpValue" class="meta-value">-</div>
+            </div>
+            <div class="meta-item">
+              <div class="meta-label">TTFF</div>
+              <div id="imagineTtffValue" class="meta-value">-</div>
+            </div>
+            <div class="meta-item">
+              <div class="meta-label">Total</div>
+              <div id="imagineTotalValue" class="meta-value">-</div>
+            </div>
+            </div>
+            <div class="mt-3">
+              <div class="meta-label">失败原因 Top</div>
+              <div id="imagineErrorTop" class="text-xs text-[var(--accents-4)] mt-1">-</div>
+              <div class="flex gap-2 mt-2">
+                <button id="imagineErrorClearBtn" class="geist-button-outline text-xs px-3" type="button">清空统计</button>
+                <button id="imagineErrorExportBtn" class="geist-button-outline text-xs px-3" type="button">导出 JSON</button>
+              </div>
             </div>
           </div>
         </div>

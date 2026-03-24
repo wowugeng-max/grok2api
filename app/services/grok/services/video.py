@@ -40,6 +40,24 @@ from app.services.token import EffortType, get_token_manager
 from app.services.token.manager import BASIC_POOL_NAME
 
 _VIDEO_SEMAPHORE = None
+
+
+def _video_sse_event(event: str, data: Dict[str, Any]) -> str:
+    return f"event: {event}\\ndata: {orjson.dumps(data).decode()}\\n\\n"
+
+
+def _video_friendly_error(err_type: str, message: str) -> str:
+    key = (err_type or "").strip()
+    if key in {"rate_limit_exceeded", "invalid_api_key"}:
+        return "当前号池繁忙或不可用，系统正在切换账号重试。"
+    if key in {"moderated_or_stream_errors", "content_blocked"}:
+        return "疑似触发审查导致生成中断，建议调整提示词后重试。"
+    if key in {"missing_video_url", "empty_video_stream", "stream_idle_timeout"}:
+        return "上游视频流处理中断或超时，建议稍后重试。"
+    if key in {"invalid_reference", "invalid_seconds"}:
+        return "请求参数不合法，请检查时长、参考图和格式。"
+    return message or "视频生成失败，请稍后重试。"
+
 _VIDEO_SEM_VALUE = 0
 _APP_CHAT_MODEL = "grok-3"
 _POST_ID_URL_PATTERN = r"/generated/([0-9a-fA-F-]{32,36})/"
@@ -671,9 +689,11 @@ async def _upscale_video_url(token: str, video_url: str) -> Tuple[str, bool]:
     return video_url, False
 
 
-def _resolve_upscale_timing() -> str:
+def _resolve_upscale_timing(target_length: int) -> str:
     raw = get_config("video.upscale_timing", "complete")
     value = str(raw or "complete").strip().lower()
+    if value == "auto":
+        return "single" if int(target_length or 6) <= 10 else "complete"
     if value in {"single", "complete"}:
         return value
     logger.warning(f"Invalid video.upscale_timing={raw!r}, fallback to 'complete'")
@@ -953,7 +973,11 @@ class VideoService:
                 requested_resolution == "720p" and pool_name == BASIC_POOL_NAME
             )
             generation_resolution = "480p" if should_upscale else requested_resolution
-            upscale_timing = _resolve_upscale_timing() if should_upscale else "complete"
+            upscale_timing = (
+                _resolve_upscale_timing(target_length)
+                if should_upscale
+                else "complete"
+            )
 
             target_length = int(video_length or 6)
             round_plan = _build_round_plan(target_length, is_super=is_super_pool)
@@ -1036,7 +1060,26 @@ class VideoService:
                     final_result: Optional[VideoRoundResult] = None
 
                     try:
+                        yield _video_sse_event(
+                            "video_generation.stage",
+                            {
+                                "type": "video_generation.stage",
+                                "stage": "queued",
+                                "detail": "请求已进入队列，准备开始视频生成",
+                                "round_total": len(round_plan),
+                            },
+                        )
                         for plan in round_plan:
+                            yield _video_sse_event(
+                                "video_generation.round",
+                                {
+                                    "type": "video_generation.round",
+                                    "stage": "round_start",
+                                    "round_index": plan.round_index,
+                                    "round_total": plan.total_rounds,
+                                    "resolution": generation_resolution,
+                                },
+                            )
                             config_override = _build_round_config(
                                 plan,
                                 seed_post_id=seed_id,
@@ -1065,6 +1108,16 @@ class VideoService:
                                 source=f"stream-round-{plan.round_index}",
                             ):
                                 if event_type == "progress":
+                                    yield _video_sse_event(
+                                        "video_generation.round",
+                                        {
+                                            "type": "video_generation.round",
+                                            "stage": "round_progress",
+                                            "round_index": plan.round_index,
+                                            "round_total": plan.total_rounds,
+                                            "progress": payload,
+                                        },
+                                    )
                                     for chunk in writer.emit_progress(
                                         round_index=plan.round_index,
                                         total_rounds=plan.total_rounds,
@@ -1079,6 +1132,15 @@ class VideoService:
                                 round_index=plan.round_index,
                                 total_rounds=plan.total_rounds,
                                 final_round=(plan.round_index == plan.total_rounds),
+                            )
+                            yield _video_sse_event(
+                                "video_generation.round",
+                                {
+                                    "type": "video_generation.round",
+                                    "stage": "round_done",
+                                    "round_index": plan.round_index,
+                                    "round_total": plan.total_rounds,
+                                },
                             )
 
                             if (
@@ -1117,6 +1179,14 @@ class VideoService:
 
                         final_video_url = final_result.video_url
                         if should_upscale and upscale_timing == "complete":
+                            yield _video_sse_event(
+                                "video_generation.stage",
+                                {
+                                    "type": "video_generation.stage",
+                                    "stage": "upscaling",
+                                    "detail": "正在进行最终超分辨率处理",
+                                },
+                            )
                             for chunk in writer.emit_note("正在对视频进行超分辨率\n"):
                                 yield chunk
                             final_video_url, upscaled = await _upscale_video_url(
@@ -1134,6 +1204,14 @@ class VideoService:
                                 token, final_video_url
                             )
 
+                        yield _video_sse_event(
+                            "video_generation.stage",
+                            {
+                                "type": "video_generation.stage",
+                                "stage": "finalizing",
+                                "detail": "正在整理最终视频输出",
+                            },
+                        )
                         dl_service = DownloadService()
                         try:
                             rendered = await dl_service.render_video(
@@ -1146,6 +1224,14 @@ class VideoService:
 
                         for chunk in writer.emit_content(rendered):
                             yield chunk
+                        yield _video_sse_event(
+                            "video_generation.stage",
+                            {
+                                "type": "video_generation.stage",
+                                "stage": "completed",
+                                "detail": "视频生成完成",
+                            },
+                        )
                         for chunk in writer.finish():
                             yield chunk
                     except asyncio.CancelledError:
@@ -1155,6 +1241,22 @@ class VideoService:
                         )
                         raise
                     except UpstreamException as e:
+                        err_key = "upstream_error"
+                        if isinstance(e.details, dict):
+                            err_key = str(
+                                e.details.get("type")
+                                or e.details.get("error_code")
+                                or err_key
+                            )
+                        yield _video_sse_event(
+                            "video_generation.stage",
+                            {
+                                "type": "video_generation.stage",
+                                "stage": "failed",
+                                "detail": _video_friendly_error(err_key, str(e)),
+                                "error_code": err_key,
+                            },
+                        )
                         if rate_limited(e):
                             await token_mgr.mark_rate_limited(token)
                         raise

@@ -32,6 +32,23 @@ from app.services.reverse.ws_imagine import ImagineWebSocketReverse
 image_service = ImagineWebSocketReverse()
 
 
+def _sse_event(event: str, data: Dict[str, Any]) -> str:
+    return f"event: {event}\\ndata: {orjson.dumps(data).decode()}\\n\\n"
+
+
+def _image_friendly_error(code: str, message: str) -> str:
+    code = (code or "").strip()
+    if code in {"rate_limit_exceeded", "invalid_api_key"}:
+        return "当前号池繁忙或不可用，系统正在尝试切换账号重试。"
+    if code in {"blocked_no_final_image", "content_blocked", "moderated_or_stream_errors"}:
+        return "疑似触发审查导致无最终图，建议调整提示词后重试。"
+    if code in {"stream_idle_timeout", "missing_video_url", "empty_video_stream"}:
+        return "上游处理超时或中断，建议稍后重试。"
+    if code in {"invalid_reference", "placeholder_mismatch"}:
+        return "引用参数不合法，请检查图片引用序号与格式。"
+    return message or "生成失败，请稍后重试。"
+
+
 @dataclass
 class ImageGenerationResult:
     stream: bool
@@ -82,6 +99,16 @@ class ImageGenerationService:
 
             async def _stream_retry() -> AsyncGenerator[str, None]:
                 nonlocal last_error
+                yield _sse_event(
+                    "image_generation.stage",
+                    {
+                        "type": "image_generation.stage",
+                        "stage": "queued",
+                        "detail": "请求已进入队列，准备分配可用 token",
+                        "attempt": 0,
+                        "max_attempts": max_token_retries,
+                    },
+                )
                 for attempt in range(max_token_retries):
                     preferred = token if (attempt == 0 and not prefer_tags) else None
                     current_token = await pick_token(
@@ -103,6 +130,16 @@ class ImageGenerationService:
 
                     tried_tokens.add(current_token)
                     yielded = False
+                    yield _sse_event(
+                        "image_generation.stage",
+                        {
+                            "type": "image_generation.stage",
+                            "stage": "generating",
+                            "detail": "已分配 token，开始生成图片",
+                            "attempt": attempt + 1,
+                            "max_attempts": max_token_retries,
+                        },
+                    )
                     try:
                         try:
                             result = await self._stream_app_chat(
@@ -122,6 +159,16 @@ class ImageGenerationService:
                                 "App-chat image stream failed, falling back to ws_imagine: %s",
                                 app_chat_error,
                             )
+                            yield _sse_event(
+                                "image_generation.stage",
+                                {
+                                    "type": "image_generation.stage",
+                                    "stage": "recovering",
+                                    "detail": "主链路失败，正在切换补偿链路继续生成",
+                                    "attempt": attempt + 1,
+                                    "max_attempts": max_token_retries,
+                                },
+                            )
                             result = await self._stream_ws(
                                 token_mgr=token_mgr,
                                 token=current_token,
@@ -137,6 +184,16 @@ class ImageGenerationService:
                         async for chunk in result.data:
                             yielded = True
                             yield chunk
+                        yield _sse_event(
+                            "image_generation.stage",
+                            {
+                                "type": "image_generation.stage",
+                                "stage": "completed",
+                                "detail": "图片生成完成",
+                                "attempt": attempt + 1,
+                                "max_attempts": max_token_retries,
+                            },
+                        )
                         return
                     except UpstreamException as e:
                         last_error = e
@@ -147,6 +204,16 @@ class ImageGenerationService:
                             logger.warning(
                                 f"Token {current_token[:10]}... rate limited (429), "
                                 f"trying next token (attempt {attempt + 1}/{max_token_retries})"
+                            )
+                            yield _sse_event(
+                                "image_generation.stage",
+                                {
+                                    "type": "image_generation.stage",
+                                    "stage": "retrying",
+                                    "detail": "当前 token 限流，正在切换 token 重试",
+                                    "attempt": attempt + 1,
+                                    "max_attempts": max_token_retries,
+                                },
                             )
                             continue
                         raise
@@ -717,12 +784,22 @@ class ImageWSStreamProcessor(ImageWSBaseProcessor):
                 if code == "rate_limit_exceeded" or status == 429:
                     raise UpstreamException(message, details=item)
                 yield self._sse(
+                    "image_generation.stage",
+                    {
+                        "type": "image_generation.stage",
+                        "stage": "failed",
+                        "detail": _image_friendly_error(code, message),
+                        "error_code": code,
+                    },
+                )
+                yield self._sse(
                     "error",
                     {
                         "error": {
                             "message": message,
                             "type": "server_error",
                             "code": code,
+                            "hint": _image_friendly_error(code, message),
                         }
                     },
                 )
