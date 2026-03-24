@@ -36,10 +36,12 @@ class AcceptTosReverse:
         """
         try:
             # Build headers
+            legacy_mode = bool(get_config("nsfw.legacy_mode", False))
             headers = build_headers(
                 cookie_token=token,
                 origin="https://accounts.x.ai",
                 referer="https://accounts.x.ai/accept-tos",
+                legacy_mode=legacy_mode,
             )
             headers["Content-Type"] = "application/grpc-web+proto"
             headers["Accept"] = "*/*"

@@ -98,13 +98,26 @@ class UpstreamException(AppException):
         status_code: int = 502,
         code: str = "upstream_error",
     ):
+        if details is None:
+            normalized_details: dict[str, Any] = {}
+        elif isinstance(details, dict):
+            normalized_details = dict(details)
+        else:
+            normalized_details = {"error": details}
+
+        normalized_status = normalized_details.get("status")
+        if isinstance(normalized_status, int):
+            status_code = normalized_status
+        else:
+            normalized_details["status"] = status_code
+
         super().__init__(
             message=message,
             error_type=ErrorType.SERVER.value,
             code=code,
             status_code=status_code,
         )
-        self.details = details
+        self.details = normalized_details
 
 
 class StreamIdleTimeoutError(Exception):

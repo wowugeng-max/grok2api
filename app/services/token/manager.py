@@ -67,6 +67,19 @@ class TokenManager:
         self._dirty_deletes = set()
         self._on_demand_refresh_lock = asyncio.Lock()
         self._last_on_demand_refresh_at = 0.0
+        # 轻量运行时指标（进程内，不持久化）
+        self._runtime_metrics: Dict[str, int] = {
+            "save_requests": 0,
+            "save_runs": 0,
+            "save_skipped_usage_window": 0,
+            "save_failures": 0,
+            "refresh_runs": 0,
+            "refresh_checked_tokens": 0,
+            "refresh_recovered_tokens": 0,
+            "refresh_expired_tokens": 0,
+            "refresh_lock_contention": 0,
+            "stream_timeout_errors": 0,
+        }
 
     @classmethod
     async def get_instance(cls) -> "TokenManager":
@@ -162,11 +175,18 @@ class TokenManager:
         except Exception:
             return False
 
+    def _increment_metric(self, key: str, value: int = 1):
+        if value <= 0:
+            return
+        self._runtime_metrics[key] = self._runtime_metrics.get(key, 0) + value
+
     def _mark_state_change(self):
+        """标记会影响选 token 行为的状态变更（status/pool/delete 等）。"""
         self._has_state_changes = True
         self._state_change_seq += 1
 
     def _mark_usage_change(self):
+        """标记仅配额/用量类变更（不直接影响可选状态）。"""
         self._has_usage_changes = True
         self._usage_change_seq += 1
 
@@ -239,11 +259,13 @@ class TokenManager:
         return to_pool
 
     async def _save(self, force: bool = False):
-        """保存变更"""
+        """保存变更（state 变更优先立即落库，usage 变更按窗口节流）。"""
         async with self._save_lock:
             try:
                 if not self._dirty_tokens and not self._dirty_deletes:
                     return
+
+                self._increment_metric("save_runs")
 
                 if not force and not self._has_state_changes:
                     interval_sec = get_config(
@@ -258,6 +280,7 @@ class TokenManager:
                         now = time.monotonic()
                         if now - self._last_usage_flush_at < interval_sec:
                             self._dirty = True
+                            self._increment_metric("save_skipped_usage_window")
                             return
 
                 state_seq = self._state_change_seq
@@ -296,6 +319,7 @@ class TokenManager:
                     self._last_usage_flush_at = time.monotonic()
             except Exception as e:
                 logger.error(f"Failed to save tokens: {e}")
+                self._increment_metric("save_failures")
                 self._dirty = True
                 if 'dirty_tokens' in locals():
                     for token_key, meta in dirty_tokens.items():
@@ -312,7 +336,7 @@ class TokenManager:
                             del self._dirty_tokens[token_key]
 
     def _schedule_save(self):
-        """合并高频保存请求，减少写入开销"""
+        """合并高频保存请求，减少写入开销。"""
         delay_ms = get_config("token.save_delay_ms", DEFAULT_SAVE_DELAY_MS)
         try:
             delay_ms = float(delay_ms)
@@ -320,6 +344,7 @@ class TokenManager:
             delay_ms = float(DEFAULT_SAVE_DELAY_MS)
         self._save_delay = max(0.0, delay_ms / 1000.0)
         self._dirty = True
+        self._increment_metric("save_requests")
         if self._save_delay == 0:
             if self._save_task and not self._save_task.done():
                 return
@@ -864,6 +889,10 @@ class TokenManager:
             stats[name] = pool_stats.model_dump()
         return stats
 
+    def get_runtime_metrics(self) -> Dict[str, int]:
+        """获取进程内运行时指标快照（仅用于观测，不保证跨 worker 聚合）。"""
+        return dict(self._runtime_metrics)
+
     def get_pool_tokens(self, pool_name: str = "ssoBasic") -> List[TokenInfo]:
         """
         获取指定池的所有 Token
@@ -922,6 +951,8 @@ class TokenManager:
         if not to_refresh:
             logger.debug(f"Refresh check: trigger={trigger}, no tokens need refresh")
             return {"checked": 0, "refreshed": 0, "recovered": 0, "expired": 0}
+
+        self._increment_metric("refresh_runs")
 
         logger.info(
             f"Refresh check: trigger={trigger}, candidates={candidate_count}, "
@@ -1078,14 +1109,19 @@ class TokenManager:
             self._track_token_change(token_info, current_pool, "state")
         await self._save(force=True)
 
+        checked = len(to_refresh)
+        self._increment_metric("refresh_checked_tokens", checked)
+        self._increment_metric("refresh_recovered_tokens", recovered)
+        self._increment_metric("refresh_expired_tokens", expired)
+
         logger.info(
             f"Refresh completed: trigger={trigger}, candidates={candidate_count}, "
-            f"checked={len(to_refresh)}, refreshed={refreshed}, "
+            f"checked={checked}, refreshed={refreshed}, "
             f"recovered={recovered}, expired={expired}"
         )
 
         return {
-            "checked": len(to_refresh),
+            "checked": checked,
             "refreshed": refreshed,
             "recovered": recovered,
             "expired": expired,
@@ -1165,6 +1201,7 @@ class TokenManager:
                     self._last_on_demand_refresh_at = time.monotonic()
                     return result
             except StorageError as exc:
+                self._increment_metric("refresh_lock_contention")
                 logger.debug("On-demand refresh skipped: {}", exc)
                 try:
                     await self.reload()

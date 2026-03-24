@@ -21,21 +21,32 @@ class ResponseLoggerMiddleware(BaseHTTPMiddleware):
     """
 
     @staticmethod
-    def _should_log_response(path: str, status_code: int, duration_ms: float) -> bool:
-        if path == "/health" and not bool(
-            get_config("log.log_health_requests", False)
-        ):
-            return False
-
-        if bool(get_config("log.log_all_requests", False)):
-            return True
-
+    def _build_log_options() -> dict:
         try:
             slow_ms = float(get_config("log.request_slow_ms", 3000))
         except (TypeError, ValueError):
             slow_ms = 3000.0
 
-        return status_code >= 400 or duration_ms >= slow_ms
+        return {
+            "log_health_requests": bool(get_config("log.log_health_requests", False)),
+            "log_all_requests": bool(get_config("log.log_all_requests", False)),
+            "request_slow_ms": slow_ms,
+        }
+
+    @staticmethod
+    def _should_log_response(
+        path: str,
+        status_code: int,
+        duration_ms: float,
+        options: dict,
+    ) -> bool:
+        if path == "/health" and not options["log_health_requests"]:
+            return False
+
+        if options["log_all_requests"]:
+            return True
+
+        return status_code >= 400 or duration_ms >= options["request_slow_ms"]
 
     async def dispatch(self, request: Request, call_next):
         # 生成请求 ID
@@ -63,8 +74,9 @@ class ResponseLoggerMiddleware(BaseHTTPMiddleware):
 
             # 计算耗时
             duration = (time.time() - start_time) * 1000
+            options = self._build_log_options()
 
-            if self._should_log_response(path, response.status_code, duration):
+            if self._should_log_response(path, response.status_code, duration, options):
                 log_method = (
                     logger.error
                     if response.status_code >= 500

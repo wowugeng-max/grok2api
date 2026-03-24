@@ -9,8 +9,15 @@ from app.core.auth import get_app_key, verify_app_key
 from app.core.batch import create_task, expire_task, get_task
 from app.core.logger import logger
 from app.core.storage import get_storage
+from app.core.proxy_pool import get_proxy_pool_health
 from app.services.grok.batch_services.usage import UsageService
 from app.services.grok.batch_services.nsfw import NSFWService
+from app.services.reverse.accept_tos import AcceptTosReverse
+from app.services.reverse.set_birth import SetBirthReverse
+from app.services.reverse.nsfw_mgmt import NsfwMgmtReverse
+from app.services.reverse.utils.session import ResettableSession
+from app.core.exceptions import UpstreamException
+from app.core.config import get_config
 from app.services.token.manager import get_token_manager
 
 router = APIRouter()
@@ -56,6 +63,71 @@ async def get_tokens():
     return {
         "tokens": results or {},
         "consumed_mode_enabled": consumed_mode,
+    }
+
+
+@router.get("/tokens/runtime-metrics", dependencies=[Depends(verify_app_key)])
+async def get_token_runtime_metrics():
+    """获取 TokenManager 运行时指标（当前 worker 进程内）。"""
+    mgr = await get_token_manager()
+    return {
+        "runtime_metrics": mgr.get_runtime_metrics(),
+        "pool_count": len(mgr.pools),
+        "token_count": sum(pool.count() for pool in mgr.pools.values()),
+    }
+
+
+@router.get("/tokens/proxy-health", dependencies=[Depends(verify_app_key)])
+async def get_token_proxy_health():
+    """获取代理池健康状态（当前 worker 进程内）。"""
+    health = get_proxy_pool_health()
+    return {
+        "status": "success",
+        "proxy_health": health,
+    }
+
+
+@router.get("/tokens/health-summary", dependencies=[Depends(verify_app_key)])
+async def get_token_health_summary():
+    """获取 Token 管理链路健康摘要（当前 worker 进程内）。"""
+    mgr = await get_token_manager()
+    metrics = mgr.get_runtime_metrics()
+
+    refresh_checked = int(metrics.get("refresh_checked_tokens", 0) or 0)
+    refresh_recovered = int(metrics.get("refresh_recovered_tokens", 0) or 0)
+    refresh_expired = int(metrics.get("refresh_expired_tokens", 0) or 0)
+    save_runs = int(metrics.get("save_runs", 0) or 0)
+    save_failures = int(metrics.get("save_failures", 0) or 0)
+    lock_contention = int(metrics.get("refresh_lock_contention", 0) or 0)
+
+    refresh_recovery_rate = (
+        round((refresh_recovered / refresh_checked) * 100, 2)
+        if refresh_checked > 0
+        else 0.0
+    )
+    refresh_expired_rate = (
+        round((refresh_expired / refresh_checked) * 100, 2)
+        if refresh_checked > 0
+        else 0.0
+    )
+    save_failure_rate = (
+        round((save_failures / save_runs) * 100, 2)
+        if save_runs > 0
+        else 0.0
+    )
+
+    return {
+        "summary": {
+            "refresh_checked_tokens": refresh_checked,
+            "refresh_recovered_tokens": refresh_recovered,
+            "refresh_expired_tokens": refresh_expired,
+            "refresh_recovery_rate_pct": refresh_recovery_rate,
+            "refresh_expired_rate_pct": refresh_expired_rate,
+            "save_runs": save_runs,
+            "save_failures": save_failures,
+            "save_failure_rate_pct": save_failure_rate,
+            "refresh_lock_contention": lock_contention,
+        }
     }
 
 
@@ -288,6 +360,111 @@ async def batch_cancel(task_id: str):
         raise HTTPException(status_code=404, detail="Task not found")
     task.cancel()
     return {"status": "success"}
+
+
+@router.post("/tokens/nsfw/diagnose", dependencies=[Depends(verify_app_key)])
+async def diagnose_nsfw(data: dict):
+    """诊断单个 Token 的 NSFW 开启链路（ToS -> SetBirth -> NSFW mgmt）。"""
+    token = ""
+    if isinstance(data, dict):
+        if isinstance(data.get("token"), str):
+            token = data.get("token", "").strip()
+
+    if not token:
+        raise HTTPException(status_code=400, detail="No token provided")
+
+    mgr = await get_token_manager()
+    browser = get_config("proxy.browser")
+    steps = []
+
+    def _extract_status(err: UpstreamException) -> int:
+        if isinstance(err.details, dict) and isinstance(err.details.get("status"), int):
+            return err.details["status"]
+        return int(getattr(err, "status_code", 502) or 502)
+
+    def _network_hint(status: int) -> str:
+        if status == 401:
+            return "Token 可能失效或未登录，请检查 token 可用性"
+        if status == 403:
+            return "疑似代理/CF 被拦截，请检查 proxy.base_proxy_url / proxy.asset_proxy_url / proxy.cf_cookies"
+        if status in (429, 503):
+            return "上游限流或暂时不可用，请稍后重试"
+        if status >= 500:
+            return "上游服务异常，请稍后重试"
+        return ""
+
+    async with ResettableSession(impersonate=browser) as session:
+        try:
+            await AcceptTosReverse.request(session, token)
+            steps.append({"step": "accept_tos", "ok": True, "status": 200})
+        except UpstreamException as e:
+            status = _extract_status(e)
+            reason = _network_hint(status)
+            steps.append(
+                {
+                    "step": "accept_tos",
+                    "ok": False,
+                    "status": status,
+                    "error": str(e),
+                    "hint": reason,
+                }
+            )
+            if status == 401:
+                await mgr.record_fail(token, status, "diagnose_tos_auth_failed")
+            return {"status": "failed", "failed_step": "accept_tos", "steps": steps}
+
+        try:
+            await SetBirthReverse.request(session, token)
+            steps.append({"step": "set_birth", "ok": True, "status": 200})
+        except UpstreamException as e:
+            status = _extract_status(e)
+            reason = _network_hint(status)
+            steps.append(
+                {
+                    "step": "set_birth",
+                    "ok": False,
+                    "status": status,
+                    "error": str(e),
+                    "hint": reason,
+                }
+            )
+            if status == 401:
+                await mgr.record_fail(token, status, "diagnose_set_birth_auth_failed")
+            return {"status": "failed", "failed_step": "set_birth", "steps": steps}
+
+        try:
+            grpc_status = await NsfwMgmtReverse.request(session, token)
+            steps.append(
+                {
+                    "step": "nsfw_mgmt",
+                    "ok": grpc_status.code in (-1, 0),
+                    "status": 200,
+                    "grpc_status": grpc_status.code,
+                    "grpc_message": grpc_status.message or None,
+                }
+            )
+        except UpstreamException as e:
+            status = _extract_status(e)
+            reason = _network_hint(status)
+            steps.append(
+                {
+                    "step": "nsfw_mgmt",
+                    "ok": False,
+                    "status": status,
+                    "error": str(e),
+                    "hint": reason,
+                }
+            )
+            if status == 401:
+                await mgr.record_fail(token, status, "diagnose_nsfw_mgmt_auth_failed")
+            return {"status": "failed", "failed_step": "nsfw_mgmt", "steps": steps}
+
+    return {
+        "status": "success",
+        "failed_step": None,
+        "steps": steps,
+        "message": "NSFW diagnose completed",
+    }
 
 
 @router.post("/tokens/nsfw/enable", dependencies=[Depends(verify_app_key)])

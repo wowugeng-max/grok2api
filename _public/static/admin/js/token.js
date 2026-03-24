@@ -13,6 +13,11 @@ let currentBatchTaskId = null;
 let batchEventSource = null;
 let currentPage = 1;
 let pageSize = 50;
+let runtimeHealthTimer = null;
+let proxyHealthIndicatorTimer = null;
+let saveFailureTrend = [];
+let saveFailureTrendCoords = [];
+const MAX_TREND_POINTS = 12;
 
 const byId = (id) => document.getElementById(id);
 const qsa = (selector) => document.querySelectorAll(selector);
@@ -114,7 +119,10 @@ async function init() {
   setupConfirmDialog();
   setupSelectAllMenu();
   refreshPageSizeOptionsI18n();
+  setupSparklineTooltip();
   loadData();
+  setupRuntimeHealthPolling();
+  setupProxyHealthIndicatorPolling();
 }
 
 async function loadData() {
@@ -138,6 +146,153 @@ async function loadData() {
   } catch (e) {
     showToast(t('common.loadError', { msg: e.message }), 'error');
   }
+}
+
+function getHealthLevel(value, warnThreshold, criticalThreshold) {
+  const n = Number(value || 0);
+  if (n >= criticalThreshold) return 'critical';
+  if (n >= warnThreshold) return 'warn';
+  return 'normal';
+}
+
+function applyHealthClass(el, level) {
+  if (!el) return;
+  el.classList.remove('health-normal', 'health-warn', 'health-critical');
+  if (level === 'critical') el.classList.add('health-critical');
+  else if (level === 'warn') el.classList.add('health-warn');
+  else el.classList.add('health-normal');
+}
+
+function renderSaveFailureSparkline(points) {
+  const polyline = byId('health-save-failure-polyline');
+  if (!polyline) return;
+
+  if (!Array.isArray(points) || points.length === 0) {
+    saveFailureTrendCoords = [];
+    polyline.setAttribute('points', '0,24 100,24');
+    polyline.setAttribute('stroke', '#16a34a');
+    return;
+  }
+
+  const maxValue = Math.max(3, ...points);
+  const minValue = 0;
+  const width = 100;
+  const height = 28;
+
+  saveFailureTrendCoords = points.map((v, i) => {
+    const x = points.length === 1 ? 100 : (i / (points.length - 1)) * width;
+    const ratio = (Number(v || 0) - minValue) / (maxValue - minValue || 1);
+    const y = height - 4 - ratio * (height - 8);
+    return { x, y, value: Number(v || 0), index: i };
+  });
+
+  polyline.setAttribute(
+    'points',
+    saveFailureTrendCoords.map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ')
+  );
+  const latest = Number(points[points.length - 1] || 0);
+  const level = getHealthLevel(latest, 1, 3);
+  const color = level === 'critical' ? '#dc2626' : level === 'warn' ? '#d97706' : '#16a34a';
+  polyline.setAttribute('stroke', color);
+}
+
+function setupSparklineTooltip() {
+  const wrap = byId('health-save-failure-sparkline-wrap');
+  const svg = byId('health-save-failure-sparkline');
+  const tooltip = byId('health-save-failure-tooltip');
+  if (!wrap || !svg || !tooltip) return;
+
+  const hideTooltip = () => {
+    tooltip.classList.add('hidden');
+  };
+
+  svg.addEventListener('mousemove', (event) => {
+    if (!saveFailureTrendCoords.length) {
+      hideTooltip();
+      return;
+    }
+
+    const rect = svg.getBoundingClientRect();
+    const relX = ((event.clientX - rect.left) / rect.width) * 100;
+    let nearest = saveFailureTrendCoords[0];
+    for (const point of saveFailureTrendCoords) {
+      if (Math.abs(point.x - relX) < Math.abs(nearest.x - relX)) {
+        nearest = point;
+      }
+    }
+
+    tooltip.textContent = `${nearest.value.toFixed(2)}%`;
+    tooltip.style.left = `${(nearest.x / 100) * rect.width}px`;
+    tooltip.classList.remove('hidden');
+  });
+
+  svg.addEventListener('mouseleave', hideTooltip);
+}
+
+function updateRuntimeHealthPanel(summary) {
+  const safe = summary || {};
+  const refreshChecked = Number(safe.refresh_checked_tokens || 0);
+  const refreshRecoveryRate = Number(safe.refresh_recovery_rate_pct || 0);
+  const refreshExpiredRate = Number(safe.refresh_expired_rate_pct || 0);
+  const saveFailureRate = Number(safe.save_failure_rate_pct || 0);
+  const lockContention = Number(safe.refresh_lock_contention || 0);
+
+  setText('health-refresh-checked', refreshChecked.toLocaleString());
+  setText('health-refresh-recovery-rate', `${refreshRecoveryRate.toFixed(2)}%`);
+  setText('health-refresh-expired-rate', `${refreshExpiredRate.toFixed(2)}%`);
+  setText('health-save-failure-rate', `${saveFailureRate.toFixed(2)}%`);
+  setText('health-lock-contention', lockContention.toLocaleString());
+
+  applyHealthClass(byId('health-refresh-recovery-rate'), getHealthLevel(100 - refreshRecoveryRate, 5, 15));
+  applyHealthClass(byId('health-refresh-expired-rate'), getHealthLevel(refreshExpiredRate, 1, 3));
+  applyHealthClass(byId('health-save-failure-rate'), getHealthLevel(saveFailureRate, 1, 3));
+  applyHealthClass(byId('health-lock-contention'), getHealthLevel(lockContention, 5, 20));
+
+  saveFailureTrend.push(saveFailureRate);
+  if (saveFailureTrend.length > MAX_TREND_POINTS) {
+    saveFailureTrend = saveFailureTrend.slice(saveFailureTrend.length - MAX_TREND_POINTS);
+  }
+  renderSaveFailureSparkline(saveFailureTrend);
+
+  const updatedAt = byId('runtime-updated-at');
+  if (updatedAt) {
+    updatedAt.textContent = `更新于 ${new Date().toLocaleTimeString()}`;
+  }
+}
+
+async function loadRuntimeHealthSummary() {
+  try {
+    const res = await fetch('/v1/admin/tokens/health-summary', {
+      headers: buildAuthHeaders(apiKey)
+    });
+    if (res.ok) {
+      const data = await res.json();
+      updateRuntimeHealthPanel(data.summary || {});
+      return;
+    }
+    if (res.status === 401) {
+      logout();
+    }
+  } catch (_) {
+    // 静默失败，避免高频打扰
+  }
+}
+
+function setupRuntimeHealthPolling() {
+  loadRuntimeHealthSummary();
+  if (runtimeHealthTimer) {
+    clearInterval(runtimeHealthTimer);
+  }
+  runtimeHealthTimer = setInterval(() => {
+    loadRuntimeHealthSummary();
+  }, 5000);
+
+  window.addEventListener('beforeunload', () => {
+    if (runtimeHealthTimer) {
+      clearInterval(runtimeHealthTimer);
+      runtimeHealthTimer = null;
+    }
+  });
 }
 
 // Convert pool dict to flattened array
@@ -767,6 +922,142 @@ async function syncToServer() {
 }
 
 // Import Logic
+async function openProxyHealthModal() {
+  openModal('proxy-health-modal');
+  await loadProxyHealth();
+}
+
+function closeProxyHealthModal() {
+  closeModal('proxy-health-modal');
+}
+
+function setProxyHealthButtonState(level) {
+  const btn = byId('btn-proxy-health');
+  if (!btn) return;
+  btn.classList.remove('proxy-health-normal', 'proxy-health-warn', 'proxy-health-critical');
+  if (level === 'critical') btn.classList.add('proxy-health-critical');
+  else if (level === 'warn') btn.classList.add('proxy-health-warn');
+  else btn.classList.add('proxy-health-normal');
+}
+
+function computeProxyHealthLevel(health) {
+  const groups = Object.values(health || {});
+  let hasBanned = false;
+  let high403 = false;
+
+  for (const g of groups) {
+    const items = Array.isArray(g.items) ? g.items : [];
+    for (const item of items) {
+      const count403 = Number(item.failure_403_count || 0);
+      if (item.is_banned) hasBanned = true;
+      if (count403 >= 2) high403 = true;
+    }
+  }
+
+  if (hasBanned) return 'critical';
+  if (high403) return 'warn';
+  return 'normal';
+}
+
+async function fetchProxyHealthData() {
+  const res = await fetch('/v1/admin/tokens/proxy-health', {
+    headers: buildAuthHeaders(apiKey)
+  });
+  if (!res.ok) {
+    if (res.status === 401) logout();
+    throw new Error(`HTTP ${res.status}`);
+  }
+  return await res.json();
+}
+
+async function updateProxyHealthIndicator() {
+  try {
+    const data = await fetchProxyHealthData();
+    const health = data.proxy_health || {};
+    const level = computeProxyHealthLevel(health);
+    setProxyHealthButtonState(level);
+  } catch (_) {
+    // 忽略指示器错误
+  }
+}
+
+function setupProxyHealthIndicatorPolling() {
+  updateProxyHealthIndicator();
+  if (proxyHealthIndicatorTimer) {
+    clearInterval(proxyHealthIndicatorTimer);
+  }
+  proxyHealthIndicatorTimer = setInterval(updateProxyHealthIndicator, 10000);
+
+  window.addEventListener('beforeunload', () => {
+    if (proxyHealthIndicatorTimer) {
+      clearInterval(proxyHealthIndicatorTimer);
+      proxyHealthIndicatorTimer = null;
+    }
+  });
+}
+
+async function loadProxyHealth() {
+  const body = byId('proxy-health-body');
+  if (body) body.innerHTML = '加载中...';
+
+  try {
+    const data = await fetchProxyHealthData();
+    const health = data.proxy_health || {};
+    const groups = Object.entries(health);
+    setProxyHealthButtonState(computeProxyHealthLevel(health));
+
+    if (!groups.length) {
+      if (body) body.innerHTML = '<div class="text-[var(--accents-4)]">暂无代理池数据</div>';
+      return;
+    }
+
+    const html = groups.map(([key, info]) => {
+      const items = Array.isArray(info.items) ? info.items : [];
+      const rows = items.map((item, idx) => {
+        const banned = item.is_banned ? '是' : '否';
+        const remain = Number(item.cooldown_remaining_sec || 0).toFixed(0);
+        const count403 = Number(item.failure_403_count || 0);
+        return `
+          <tr>
+            <td class="px-2 py-1 text-xs">${idx + 1}</td>
+            <td class="px-2 py-1 text-xs font-mono">${escapeHtml(item.proxy || '')}</td>
+            <td class="px-2 py-1 text-xs text-center">${count403}</td>
+            <td class="px-2 py-1 text-xs text-center">${banned}</td>
+            <td class="px-2 py-1 text-xs text-center">${remain}s</td>
+          </tr>
+        `;
+      }).join('');
+
+      return `
+        <div class="mb-3 border border-[var(--border)] rounded-lg overflow-hidden">
+          <div class="px-3 py-2 bg-[var(--accents-1)] text-xs font-semibold flex items-center justify-between">
+            <span>${escapeHtml(key)}</span>
+            <span>size=${Number(info.size || 0)}, current_index=${Number(info.current_index || 0)}</span>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="min-w-full">
+              <thead>
+                <tr class="text-[11px] text-[var(--accents-5)] border-b border-[var(--border)]">
+                  <th class="px-2 py-1 text-left">#</th>
+                  <th class="px-2 py-1 text-left">Proxy</th>
+                  <th class="px-2 py-1 text-center">403计数</th>
+                  <th class="px-2 py-1 text-center">熔断</th>
+                  <th class="px-2 py-1 text-center">剩余冷却</th>
+                </tr>
+              </thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    if (body) body.innerHTML = html;
+  } catch (e) {
+    if (body) body.innerHTML = `<div class="text-red-600 text-xs">加载失败：${escapeHtml(e.message || 'unknown error')}</div>`;
+  }
+}
+
 function openImportModal() {
   openModal('import-modal');
 }
@@ -1314,6 +1605,16 @@ async function batchEnableNSFW() {
           const okCount = summary ? summary.ok : 0;
           const failCount = summary ? summary.fail : 0;
           let text = t('token.nsfwResult', { ok: okCount, fail: failCount });
+
+          const resultMap = msg.result && msg.result.results ? msg.result.results : {};
+          const errors = Object.values(resultMap)
+            .map(v => (v && typeof v === 'object' ? v.error : ''))
+            .filter(Boolean);
+          const has403 = errors.some(e => String(e).includes('403'));
+          if (failCount > 0 && has403) {
+            text += '\n⚠️ 检测到 403 拒绝，请检查代理/CF 配置（proxy.* 或 cf_cookies）。';
+          }
+
           if (msg.warning) text += `\n⚠️ ${msg.warning}`;
           showToast(text, failCount > 0 || msg.warning ? 'warning' : 'success');
           currentBatchTaskId = null;
@@ -1351,7 +1652,11 @@ async function batchEnableNSFW() {
     });
   } catch (e) {
     finishBatchProcess(true, { silent: true });
-    showToast(t('token.requestError') + ': ' + e.message, 'error');
+    const msg = String(e?.message || '');
+    const hint403 = msg.includes('403')
+      ? '\n请检查代理/CF 配置（proxy.base_proxy_url、proxy.asset_proxy_url、proxy.cf_cookies）。'
+      : '';
+    showToast(t('token.requestError') + ': ' + msg + hint403, 'error');
     if (btn) btn.disabled = false;
     setActionButtonsState();
   }

@@ -13,6 +13,7 @@ from app.core.proxy_pool import (
     get_current_proxy_from,
     rotate_proxy,
     should_rotate_proxy,
+    record_proxy_status,
 )
 from app.core.exceptions import UpstreamException
 from app.services.reverse.utils.headers import build_headers
@@ -69,22 +70,23 @@ class RateLimitsReverse:
                 )
 
                 if response.status_code != 200:
+                    record_proxy_status(active_proxy_key, proxy_url, response.status_code)
                     try:
                         resp_text = response.text
                     except Exception:
                         resp_text = "N/A"
-                    
+
                     # --- 识别逻辑开始 ---
                     # 区分是真正的 Token 过期还是 Cloudflare 拦截
                     is_token_expired = False
                     server_header = response.headers.get("Server", "").lower()
                     content_type = response.headers.get("Content-Type", "").lower()
-                    
+
                     # 1. 只有当返回不是 JSON 且包含 cloudflare 关键字，或者包含特定的 challenge 标志时，才认为是网络拦截
                     is_cloudflare = "challenge-platform" in resp_text
                     if "cloudflare" in server_header and "application/json" not in content_type:
                         is_cloudflare = True
-                    
+
                     # 2. 如果是 401 且返回 JSON 内容包含认证失败关键字，则确认为 Token 过期
                     if response.status_code == 401 and "application/json" in content_type:
                         # 增加 unauthenticated 和 bad-credentials 等更精确的关键字
@@ -102,17 +104,18 @@ class RateLimitsReverse:
                         resp_text[:300],
                         extra={"error_type": "UpstreamException"},
                     )
-                    
+
                     raise UpstreamException(
                         message=f"RateLimitsReverse: Request failed, {response.status_code}",
                         details={
-                            "status": response.status_code, 
+                            "status": response.status_code,
                             "body": resp_text,
                             "is_token_expired": is_token_expired,
                             "is_cloudflare": is_cloudflare
                         },
                     )
 
+                record_proxy_status(active_proxy_key, proxy_url, response.status_code)
                 return response
 
             async def _on_retry(attempt: int, status_code: int, error: Exception, delay: float):

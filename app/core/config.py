@@ -42,9 +42,8 @@ def _migrate_deprecated_config(
     Returns:
         (迁移后的配置, 废弃的配置节集合)
     """
-    # 配置映射规则：旧配置 -> 新配置
-    MIGRATION_MAP = {
-        # grok.* -> 对应的新配置节
+    # 配置映射规则：旧配置 -> 新配置（按来源分组）
+    grok_map = {
         "grok.temporary": "app.temporary",
         "grok.disable_memory": "app.disable_memory",
         "grok.stream": "app.stream",
@@ -54,14 +53,9 @@ def _migrate_deprecated_config(
         "grok.timeout": "voice.timeout",
         "grok.base_proxy_url": "proxy.base_proxy_url",
         "grok.asset_proxy_url": "proxy.asset_proxy_url",
-        "network.base_proxy_url": "proxy.base_proxy_url",
-        "network.asset_proxy_url": "proxy.asset_proxy_url",
         "grok.cf_clearance": "proxy.cf_clearance",
         "grok.browser": "proxy.browser",
         "grok.user_agent": "proxy.user_agent",
-        "security.cf_clearance": "proxy.cf_clearance",
-        "security.browser": "proxy.browser",
-        "security.user_agent": "proxy.user_agent",
         "grok.max_retry": "retry.max_retry",
         "grok.retry_status_codes": "retry.retry_status_codes",
         "grok.retry_backoff_base": "retry.retry_backoff_base",
@@ -73,7 +67,9 @@ def _migrate_deprecated_config(
         "grok.image_ws_blocked_seconds": "image.final_timeout",
         "grok.image_ws_final_min_bytes": "image.final_min_bytes",
         "grok.image_ws_medium_min_bytes": "image.medium_min_bytes",
-        # legacy sections
+    }
+
+    legacy_map = {
         "network.base_proxy_url": "proxy.base_proxy_url",
         "network.asset_proxy_url": "proxy.asset_proxy_url",
         "network.timeout": [
@@ -109,6 +105,26 @@ def _migrate_deprecated_config(
         "performance.nsfw_max_concurrent": "nsfw.concurrent",
         "performance.nsfw_batch_size": "nsfw.batch_size",
     }
+
+    migration_sources = {
+        "grok": grok_map,
+        "legacy": legacy_map,
+    }
+    MIGRATION_MAP: Dict[str, Any] = {}
+    duplicated_keys: set[str] = set()
+    for source_name, source_map in migration_sources.items():
+        for old_path, new_path in source_map.items():
+            if old_path in MIGRATION_MAP:
+                duplicated_keys.add(old_path)
+                logger.warning(
+                    f"Duplicate migration key detected ({source_name}): {old_path}"
+                )
+            MIGRATION_MAP[old_path] = new_path
+
+    if duplicated_keys:
+        logger.warning(
+            f"Migration map contains duplicated keys: {sorted(duplicated_keys)}"
+        )
 
     deprecated_sections = set(config.keys()) - valid_sections
     if not deprecated_sections:

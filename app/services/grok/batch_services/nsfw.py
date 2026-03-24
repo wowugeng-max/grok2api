@@ -70,11 +70,34 @@ class NSFWService:
                             await SetBirthReverse.request(session, token)
                     except UpstreamException as e:
                         status = await _record_fail(e, "set_birth_auth_failed")
-                        return {
-                            "success": False,
-                            "http_status": status,
-                            "error": f"Set birth date failed: {str(e)}",
-                        }
+
+                        # 自动回退：默认模式下遇到 403，尝试 legacy header/cookie 风格再试一次
+                        if status == 403 and not bool(get_config("nsfw.legacy_mode", False)):
+                            logger.warning(
+                                f"Token {token[:10]}...: set_birth got 403, retrying once with legacy mode"
+                            )
+                            try:
+                                async with _get_nsfw_semaphore():
+                                    await SetBirthReverse.request(
+                                        session,
+                                        token,
+                                        legacy_mode_override=True,
+                                    )
+                            except UpstreamException as fallback_err:
+                                fallback_status = await _record_fail(
+                                    fallback_err, "set_birth_auth_failed_legacy_fallback"
+                                )
+                                return {
+                                    "success": False,
+                                    "http_status": fallback_status,
+                                    "error": f"Set birth date failed after legacy fallback: {str(fallback_err)}",
+                                }
+                        else:
+                            return {
+                                "success": False,
+                                "http_status": status,
+                                "error": f"Set birth date failed: {str(e)}",
+                            }
 
                     try:
                         async with _get_nsfw_semaphore():

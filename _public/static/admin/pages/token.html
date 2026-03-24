@@ -30,6 +30,13 @@
           <p class="text-[var(--accents-4)] mt-1 text-sm" data-i18n="token.subtitle">管理 Grok2API 的 Token 服务号池。</p>
         </div>
         <div class="flex items-center gap-3">
+          <button id="btn-proxy-health" onclick="openProxyHealthModal()" class="geist-button-outline gap-2">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 6 9 17l-5-5"></path>
+            </svg>
+            <span>代理健康</span>
+          </button>
           <button onclick="openImportModal()" class="geist-button-outline gap-2">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
               stroke-linecap="round" stroke-linejoin="round">
@@ -86,6 +93,48 @@
         <div class="stat-card">
           <div class="stat-value" id="stat-total-calls">-</div>
           <div class="stat-label" data-i18n="token.statTotalCalls">总调用次数</div>
+        </div>
+      </div>
+
+      <!-- Runtime Metrics -->
+      <div class="token-table-shell rounded-lg overflow-hidden bg-white mb-4 p-4">
+        <div class="flex items-center justify-between mb-2">
+          <h3 class="text-sm font-semibold text-[var(--accents-7)]">运行时健康摘要</h3>
+          <span id="runtime-updated-at" class="text-xs text-[var(--accents-4)]">-</span>
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
+          <div class="stat-card">
+            <div class="stat-value" id="health-refresh-checked">0</div>
+            <div class="stat-label">Refresh 检查数</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value text-green-600" id="health-refresh-recovery-rate">0%</div>
+            <div class="stat-label">Refresh 恢复率</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value text-red-600" id="health-refresh-expired-rate">0%</div>
+            <div class="stat-label">Refresh 失效率</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="health-save-failure-rate">0%</div>
+            <div class="stat-label">保存失败率</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="health-lock-contention">0</div>
+            <div class="stat-label">锁竞争次数</div>
+          </div>
+        </div>
+        <div class="runtime-trend mt-3">
+          <div class="runtime-trend-header">
+            <span>保存失败率趋势（最近 1 分钟）</span>
+            <span id="health-threshold-hint" class="runtime-threshold-hint">阈值：Warn &gt; 1%，Critical &gt; 3%</span>
+          </div>
+          <div id="health-save-failure-sparkline-wrap" class="runtime-sparkline-wrap">
+            <svg id="health-save-failure-sparkline" viewBox="0 0 100 28" preserveAspectRatio="none" class="runtime-sparkline">
+              <polyline id="health-save-failure-polyline" points="" fill="none" stroke="#16a34a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+            </svg>
+            <div id="health-save-failure-tooltip" class="runtime-sparkline-tooltip hidden"></div>
+          </div>
         </div>
       </div>
 
@@ -304,6 +353,26 @@
           <button onclick="closeEditModal()" class="geist-button-outline text-xs px-3" data-i18n="common.cancel">取消</button>
           <button onclick="saveEdit()" class="geist-button text-xs px-3" data-i18n="common.save">保存</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="proxy-health-modal" class="modal-overlay hidden">
+    <div class="modal-content modal-lg" id="proxy-health-modal-content">
+      <div class="modal-header">
+        <h3 class="modal-title">代理池健康状态</h3>
+        <button onclick="closeProxyHealthModal()" class="modal-close">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+      <div class="space-y-3">
+        <div class="flex justify-end">
+          <button onclick="loadProxyHealth()" class="geist-button-outline text-xs px-3">刷新</button>
+        </div>
+        <div id="proxy-health-body" class="text-sm text-[var(--accents-6)] max-h-80 overflow-auto"></div>
       </div>
     </div>
   </div>

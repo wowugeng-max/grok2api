@@ -4,7 +4,7 @@ Reverse interface: set birth date.
 
 import datetime
 import random
-from typing import Any
+from typing import Any, Optional
 from curl_cffi.requests import AsyncSession
 
 from app.core.logger import logger
@@ -14,6 +14,7 @@ from app.core.proxy_pool import (
     get_current_proxy_from,
     rotate_proxy,
     should_rotate_proxy,
+    record_proxy_status,
 )
 from app.core.exceptions import UpstreamException
 from app.services.reverse.utils.headers import build_headers
@@ -26,7 +27,11 @@ class SetBirthReverse:
     """/rest/auth/set-birth-date reverse interface."""
 
     @staticmethod
-    async def request(session: AsyncSession, token: str) -> Any:
+    async def request(
+        session: AsyncSession,
+        token: str,
+        legacy_mode_override: Optional[bool] = None,
+    ) -> Any:
         """Set birth date in Grok.
 
         Args:
@@ -38,11 +43,18 @@ class SetBirthReverse:
         """
         try:
             # Build headers
+            configured_legacy_mode = bool(get_config("nsfw.legacy_mode", False))
+            legacy_mode = (
+                configured_legacy_mode
+                if legacy_mode_override is None
+                else bool(legacy_mode_override)
+            )
             headers = build_headers(
                 cookie_token=token,
                 content_type="application/json",
                 origin="https://grok.com",
                 referer="https://grok.com/?_s=home",
+                legacy_mode=legacy_mode,
             )
 
             # Build payload
@@ -78,6 +90,7 @@ class SetBirthReverse:
                 )
 
                 if response.status_code not in (200, 204):
+                    record_proxy_status(active_proxy_key, proxy_url, response.status_code)
                     logger.error(
                         f"SetBirthReverse: Request failed, {response.status_code}",
                         extra={"error_type": "UpstreamException"},
@@ -87,6 +100,7 @@ class SetBirthReverse:
                         details={"status": response.status_code},
                     )
 
+                record_proxy_status(active_proxy_key, proxy_url, response.status_code)
                 logger.debug(f"SetBirthReverse: Request successful, {response.status_code}")
 
                 return response

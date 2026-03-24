@@ -57,12 +57,13 @@ def _sanitize_header_value(
     return normalized
 
 
-def build_sso_cookie(sso_token: str) -> str:
+def build_sso_cookie(sso_token: str, legacy_mode: bool = False) -> str:
     """
     Build SSO Cookie string.
 
     Args:
         sso_token: str, the SSO token.
+        legacy_mode: bool, whether to use legacy/simple cookie composition.
 
     Returns:
         str: The SSO Cookie string.
@@ -75,6 +76,17 @@ def build_sso_cookie(sso_token: str) -> str:
 
     # SSO Cookie
     cookie = f"sso={sso_token}; sso-rw={sso_token}"
+
+    if legacy_mode:
+        # 兼容旧模式：仅追加 cf_clearance，避免整段 cf_cookies 干扰请求。
+        cf_clearance = _sanitize_header_value(
+            get_config("proxy.cf_clearance") or "",
+            field_name="proxy.cf_clearance",
+            remove_all_spaces=True,
+        )
+        if cf_clearance:
+            cookie += f"; cf_clearance={cf_clearance}"
+        return cookie
 
     # CF Cookies
     cf_cookies = _sanitize_header_value(
@@ -239,7 +251,13 @@ def build_ws_headers(token: Optional[str] = None, origin: Optional[str] = None, 
     return headers
 
 
-def build_headers(cookie_token: str, content_type: Optional[str] = None, origin: Optional[str] = None, referer: Optional[str] = None) -> Dict[str, str]:
+def build_headers(
+    cookie_token: str,
+    content_type: Optional[str] = None,
+    origin: Optional[str] = None,
+    referer: Optional[str] = None,
+    legacy_mode: bool = False,
+) -> Dict[str, str]:
     """
     Build headers for reverse interfaces.
 
@@ -275,7 +293,7 @@ def build_headers(cookie_token: str, content_type: Optional[str] = None, origin:
         headers.update(client_hints)
 
     # Cookie
-    headers["Cookie"] = build_sso_cookie(cookie_token)
+    headers["Cookie"] = build_sso_cookie(cookie_token, legacy_mode=legacy_mode)
 
     # Content-Type and Accept/Sec-Fetch-Dest
     if content_type and content_type == "application/json":

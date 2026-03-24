@@ -303,6 +303,10 @@ class GrokChatService:
                 async for line in stream_response:
                     yield line
             finally:
+                try:
+                    await session.close()
+                except Exception:
+                    pass
                 semaphore.release()
 
         return _stream()

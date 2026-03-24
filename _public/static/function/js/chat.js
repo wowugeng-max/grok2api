@@ -426,6 +426,16 @@
     if (sendBtn) sendBtn.disabled = sending;
   }
 
+  function updateComposerState() {
+    if (!promptInput) return;
+    const composer = promptInput.closest('.composer-input');
+    if (!composer) return;
+    const hasValue = !!promptInput.value.trim();
+    const isFocused = document.activeElement === promptInput;
+    composer.classList.toggle('has-value', hasValue);
+    composer.classList.toggle('is-focused', isFocused);
+  }
+
   function updateRangeValues() {
     if (tempValue && tempRange) {
       tempValue.textContent = Number(tempRange.value).toFixed(2);
@@ -984,6 +994,12 @@
 
     abortController = new AbortController();
     const payload = buildPayload();
+    if (isImagineModel(payload.model)) {
+      payload.image_mode = true;
+    }
+    if (isImagineModel(payload.model)) {
+      payload.image_mode = true;
+    }
 
     (async () => {
       let headers = { 'Content-Type': 'application/json' };
@@ -1214,7 +1230,7 @@
       setRenderedHTML(entry.contentNode, renderMarkdown(entry.raw));
     } else {
       if (entry.role === 'assistant') {
-        setRenderedHTML(entry.contentNode, renderMarkdown(entry.raw));
+        setRenderedHTML(entry.contentNode, `${renderMarkdown(entry.raw)}<span class="typing-caret">▍</span>`);
       } else {
         entry.contentNode.textContent = entry.raw;
       }
@@ -1309,7 +1325,27 @@
       payload.push({ role: 'system', content: systemPrompt });
     }
     for (const msg of history) {
-      payload.push({ role: msg.role, content: msg.content });
+      if (!msg || !msg.role) continue;
+      const content = msg.content;
+
+      if (typeof content === 'string') {
+        if (!content.trim()) continue;
+        payload.push({ role: msg.role, content });
+        continue;
+      }
+
+      if (Array.isArray(content)) {
+        if (!content.length) continue;
+        payload.push({ role: msg.role, content });
+        continue;
+      }
+
+      if (content && typeof content === 'object') {
+        payload.push({ role: msg.role, content });
+        continue;
+      }
+
+      // 过滤掉空内容消息，避免触发后端 400: Message content cannot be empty
     }
     return payload;
   }
@@ -1334,6 +1370,16 @@
       top_p: Number(topPRange ? topPRange.value : 0.95)
     };
     return payload;
+  }
+
+  function isImagineModel(model) {
+    const m = String(model || '').toLowerCase();
+    return m.includes('imagine');
+  }
+
+  function containsImageMarkdown(text) {
+    const value = String(text || '');
+    return /!\[[^\]]*\]\(([^)]+)\)/.test(value) || /data:image\//i.test(value);
   }
 
   function selectModel(value) {
@@ -1462,6 +1508,14 @@
     });
 
     actions.appendChild(retryBtn);
+
+    const looksLikeImageReply = /!\[[^\]]*\]\(([^)]+)\)/.test(String(entry.raw || ''));
+    const looksLikeImageError = /\[错误\]|生成失败|image_generation/i.test(String(entry.raw || ''));
+    if (looksLikeImageReply || looksLikeImageError) {
+      const retryImageBtn = createActionButton('重试生成', '按同一提示词重新生成图片', () => retryLast());
+      actions.appendChild(retryImageBtn);
+    }
+
     actions.appendChild(editBtn);
     actions.appendChild(copyBtn);
     actions.appendChild(feedbackBtn);
@@ -1515,6 +1569,9 @@
 
     abortController = new AbortController();
     const payload = buildPayloadFrom(historySlice);
+    if (isImagineModel(payload.model)) {
+      payload.image_mode = true;
+    }
 
     let headers = { 'Content-Type': 'application/json' };
     try {
@@ -1585,6 +1642,7 @@
     trimMessageHistory();
     if (promptInput) promptInput.value = '';
     clearAttachment();
+    updateComposerState();
     syncCurrentSession();
     syncSessionModel();
     updateSessionTitle(getActiveSession());
@@ -1687,19 +1745,53 @@
           const payload = trimmed.slice(5).trim();
           if (!payload) continue;
           if (payload === '[DONE]') {
+            // imagine 模型兜底：若未返回图片markdown，则给出明确提示
+            if (isImagineModel(modelValue) && !containsImageMarkdown(assistantText)) {
+              const failText = assistantText && assistantText.trim()
+                ? `${assistantText}\n\n[错误] 图片生成未返回可渲染的图片地址（URL/Base64），请重试或更换代理IP。`
+                : '[错误] 图片生成未返回可渲染的图片地址（URL/Base64），请重试或更换代理IP。';
+              assistantText = failText;
+              setMessageMeta(assistantEntry, '生成失败', 'error');
+            }
+
             updateMessage(assistantEntry, assistantText, true);
             if (assistantEntry.hasThink) {
               const elapsed = assistantEntry.thinkElapsed || Math.max(1, Math.round((Date.now() - assistantEntry.startedAt) / 1000));
               updateThinkSummary(assistantEntry, elapsed);
             }
             const totalMs = Math.max(0, Date.now() - assistantEntry.startedAt);
-            setMessageMeta(assistantEntry, `完成 · 总耗时 ${totalMs}ms`, 'done');
+            if (!assistantEntry.metaNode || !assistantEntry.metaNode.classList.contains('error')) {
+              setMessageMeta(assistantEntry, `完成 · 总耗时 ${totalMs}ms`, 'done');
+            }
             assistantEntry.committed = true;
             commitToSession(targetSessionId, assistantText);
             return;
           }
           try {
             const json = JSON.parse(payload);
+
+            // SSE error/event payload（图片链路常见），避免前端出现“空白回复”
+            if (json && json.error) {
+              const err = json.error || {};
+              const hint = err.hint ? `\n\n提示：${err.hint}` : '';
+              const msg = err.message || '请求失败';
+              assistantText += `\n[错误] ${msg}${hint}\n`;
+              if (sessionsData.activeId === targetSessionId) {
+                updateMessage(assistantEntry, assistantText, true);
+              }
+              setMessageMeta(assistantEntry, '生成失败', 'error');
+              continue;
+            }
+
+            // 阶段提示事件（queued/retrying/failed等）
+            if (json && json.type === 'image_generation.stage') {
+              const stageDetail = (json.detail || '').trim();
+              if (stageDetail) {
+                setMessageMeta(assistantEntry, stageDetail, 'streaming');
+              }
+              continue;
+            }
+
             const delta = json && json.choices && json.choices[0] && json.choices[0].delta
               ? json.choices[0].delta.content
               : '';
@@ -1808,6 +1900,9 @@
       promptInput.addEventListener('compositionend', () => {
         composing = false;
       });
+      promptInput.addEventListener('focus', updateComposerState);
+      promptInput.addEventListener('blur', updateComposerState);
+      promptInput.addEventListener('input', updateComposerState);
       promptInput.addEventListener('keydown', (event) => {
         if (event.key === 'Enter' && !event.shiftKey) {
           if (composing || event.isComposing) return;
@@ -1848,6 +1943,7 @@
   loadModels();
   bindEvents();
   restoreSidebarState();
+  updateComposerState();
 
   (async () => {
     try {

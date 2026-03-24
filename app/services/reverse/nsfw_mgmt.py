@@ -36,10 +36,12 @@ class NsfwMgmtReverse:
         """
         try:
             # Build headers
+            legacy_mode = bool(get_config("nsfw.legacy_mode", False))
             headers = build_headers(
                 cookie_token=token,
                 origin="https://grok.com",
                 referer="https://grok.com/?_s=data",
+                legacy_mode=legacy_mode,
             )
             headers["Content-Type"] = "application/grpc-web+proto"
             headers["Accept"] = "*/*"

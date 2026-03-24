@@ -54,6 +54,10 @@ cf_clearance = ""
 browser = "chrome136"
 # User-Agent 字符串
 user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
+# 连续 403 达到阈值后触发代理熔断并轮换
+fail_403_threshold = 3
+# 403 熔断冷却时长（秒）
+fail_403_cooldown_sec = 300
 
 
 # ==================== 重试策略 ====================
@@ -213,6 +217,8 @@ concurrent = 60
 batch_size = 30
 # NSFW 请求超时时间（秒）
 timeout = 60
+# 兼容原始模式（仅拼接 sso/sso-rw + cf_clearance，不使用完整 cf_cookies）
+legacy_mode = false
 
 # ==================== 用量配置 ====================
 [usage]
