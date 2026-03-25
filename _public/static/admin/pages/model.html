@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Grok2API - 模型管理</title>
+  <link rel="icon" href="/favicon.ico">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdn.jsdelivr.net/npm/geist@1.0.0/dist/fonts/geist-sans/style.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/geist@1.0.0/dist/fonts/geist-mono/style.css" rel="stylesheet">
+  <link href="/static/common/css/common.css?v=1.6.2" rel="stylesheet">
+  <link href="/static/common/css/toast.css" rel="stylesheet">
+</head>
+
+<body class="min-h-screen flex flex-col" style="background-color: var(--bg);">
+  <div id="toast-container" class="toast-container"></div>
+  <div id="app-header"></div>
+
+  <main class="space-y-6 flex-1 container mx-auto max-w-5xl px-6 py-8 fade-in">
+    <div class="space-y-5">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="text-2xl font-semibold tracking-tight">模型管理</h2>
+          <p class="text-[var(--accents-4)] mt-1 text-sm">通过 xAI 公开文档同步模型ID（无需 API Key），再手工映射到本地可执行模型。</p>
+        </div>
+      </div>
+
+      <div class="border border-[var(--border)] rounded-xl bg-white p-4 space-y-4">
+        <div class="text-sm text-[var(--accents-5)]">从公开文档同步模型（无需 API Key）：</div>
+        <div class="text-xs text-[var(--accents-4)] leading-6">
+          <div>• 来源 1：<span class="font-mono">https://docs.x.ai/developers/models</span></div>
+          <div>• 来源 2：<span class="font-mono">https://x.ai/api</span>（兜底）</div>
+          <div>• 说明：同步的是公开模型 ID，是否可执行取决于本地映射与后端实现。</div>
+        </div>
+        <div class="flex gap-3">
+          <button id="discover-btn" class="geist-button">同步公开模型</button>
+          <button id="enable-btn" class="geist-button-outline">启用注册表过滤</button>
+          <button id="disable-btn" class="geist-button-outline">停用注册表过滤</button>
+        </div>
+        <div id="sync-status" class="text-xs text-[var(--accents-5)]"></div>
+      </div>
+
+      <div class="border border-[var(--border)] rounded-xl bg-white p-4 space-y-4">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="font-medium">手工映射编辑器</h3>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
+          <div>
+            <label class="text-xs text-[var(--accents-5)]">模型ID</label>
+            <input id="manual-model-id" class="geist-input w-full" placeholder="如 grok-4.20-reasoning" />
+          </div>
+          <div>
+            <label class="text-xs text-[var(--accents-5)]">模型名称</label>
+            <input id="manual-model-name" class="geist-input w-full" placeholder="如 Grok 4.20 推理版" />
+          </div>
+          <div>
+            <label class="text-xs text-[var(--accents-5)]">映射到本地模型</label>
+            <select id="manual-mapped-to" class="geist-input w-full"></select>
+          </div>
+          <div class="flex gap-2">
+            <button id="save-manual-btn" class="geist-button">添加并映射</button>
+            <button id="delete-manual-btn" class="geist-button-outline">按模型ID删除</button>
+          </div>
+        </div>
+        <div id="alias-list" class="text-xs text-[var(--accents-5)]"></div>
+      </div>
+
+      <div class="border border-[var(--border)] rounded-xl bg-white p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="font-medium">当前注册表</h3>
+          <div id="registry-meta" class="text-xs text-[var(--accents-5)]"></div>
+        </div>
+        <div class="overflow-auto">
+          <table class="min-w-full text-sm">
+            <thead>
+              <tr class="text-left text-[var(--accents-5)] border-b border-[var(--border)]">
+                <th class="py-2 pr-3">模型ID</th>
+                <th class="py-2 pr-3">来源</th>
+                <th class="py-2 pr-3">是否本地支持</th>
+                <th class="py-2 pr-3">是否可执行</th>
+                <th class="py-2 pr-3">映射到</th>
+              </tr>
+            </thead>
+            <tbody id="models-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <div id="app-footer"></div>
+
+  <script src="/static/i18n/i18n.js"></script>
+  <script src="/static/common/js/admin-auth.js?v=1.6.2"></script>
+  <script src="/static/common/js/header.js?v=1.6.2"></script>
+  <script src="/static/common/js/footer.js?v=1.6.2"></script>
+  <script src="/static/common/js/toast.js"></script>
+  <script src="/static/admin/js/model.js?v=1.6.2"></script>
+</body>
+
+</html>

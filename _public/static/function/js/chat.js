@@ -2,8 +2,10 @@
   const modelChip = document.getElementById('modelChip');
   const modelLabel = document.getElementById('modelLabel');
   const modelDropdown = document.getElementById('modelDropdown');
+  const refreshModelsBtn = document.getElementById('refreshModelsBtn');
   let modelValue = 'grok-4.20-beta';
   let modelList = [];
+  let modelMetaMap = new Map();
   const tempRange = document.getElementById('tempRange');
   const tempValue = document.getElementById('tempValue');
   const topPRange = document.getElementById('topPRange');
@@ -997,9 +999,6 @@
     if (isImagineModel(payload.model)) {
       payload.image_mode = true;
     }
-    if (isImagineModel(payload.model)) {
-      payload.image_mode = true;
-    }
 
     (async () => {
       let headers = { 'Content-Type': 'application/json' };
@@ -1384,7 +1383,8 @@
 
   function selectModel(value) {
     modelValue = value;
-    if (modelLabel) modelLabel.textContent = value;
+    const meta = modelMetaMap.get(value);
+    if (modelLabel) modelLabel.textContent = ((meta && meta.name) ? meta.name : value).toLowerCase();
     renderModelDropdown();
   }
 
@@ -1392,10 +1392,13 @@
     if (!modelDropdown) return;
     modelDropdown.innerHTML = '';
     for (const id of modelList) {
+      const meta = modelMetaMap.get(id) || {};
       const opt = document.createElement('div');
       opt.className = 'model-option' + (id === modelValue ? ' selected' : '');
+      if (meta.manual) opt.classList.add('manual');
       opt.dataset.value = id;
-      opt.textContent = id;
+      const name = (meta.name || id || '').toLowerCase();
+      opt.textContent = meta.manual ? `${name}（手工）` : name;
       modelDropdown.appendChild(opt);
     }
   }
@@ -1416,31 +1419,55 @@
     if (!modelDropdown) return;
     const fallback = ['grok-4.1-fast', 'grok-4', 'grok-3', 'grok-3-mini', 'grok-3-thinking', 'grok-4.20-beta', 'grok-imagine-1.0-fast'];
     const preferred = 'grok-4.20-beta';
+    modelMetaMap = new Map();
     try {
-      const res = await fetch('/v1/models', { cache: 'no-store' });
+      let headers = {};
+      try {
+        const authHeader = await ensureFunctionKey();
+        headers = buildAuthHeaders(authHeader);
+      } catch (e) {
+        // keep anonymous request as fallback
+      }
+      const res = await fetch('/v1/function/models', { cache: 'no-store', headers });
       if (!res.ok) throw new Error('models fetch failed');
       const data = await res.json();
       const items = Array.isArray(data && data.data) ? data.data : [];
+      const dedup = new Set();
       const ids = items
-        .map(item => item && item.id)
         .filter(Boolean)
-        .filter((id) => {
-          const name = String(id);
-          if (name.startsWith('grok-imagine')) {
-            return name === 'grok-imagine-1.0-fast';
-          }
-          return !name.includes('video');
+        .filter((item) => {
+          const mid = String(item.id || '');
+          if (!mid) return false;
+          if (mid.includes('video')) return false;
+          if (item.executable === false) return false;
+          if (dedup.has(mid)) return false;
+          dedup.add(mid);
+          return true;
+        })
+        .map((item) => {
+          const id = String(item.id || '');
+          modelMetaMap.set(id, {
+            id,
+            name: String(item.name || item.id || '').toLowerCase(),
+            manual: !!item.manual
+          });
+          return id;
         });
       modelList = ids.length ? ids : fallback;
+      fallback.forEach((id) => {
+        if (!modelMetaMap.has(id)) modelMetaMap.set(id, { id, name: id.toLowerCase(), manual: false });
+      });
     } catch (e) {
       modelList = fallback;
+      modelMetaMap = new Map(fallback.map((id) => [id, { id, name: id.toLowerCase(), manual: false }]));
     }
     if (modelList.includes(preferred)) {
       modelValue = preferred;
     } else {
       modelValue = modelList[modelList.length - 1] || preferred;
     }
-    if (modelLabel) modelLabel.textContent = modelValue;
+    const selected = modelMetaMap.get(modelValue);
+    if (modelLabel) modelLabel.textContent = (selected && selected.name ? selected.name : modelValue).toLowerCase();
     renderModelDropdown();
     restoreSessionModel();
   }
@@ -1871,6 +1898,21 @@
         event.stopPropagation();
         selectModel(opt.dataset.value);
         toggleModelDropdown(false);
+      });
+    }
+    if (refreshModelsBtn) {
+      refreshModelsBtn.addEventListener('click', async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        refreshModelsBtn.disabled = true;
+        try {
+          await loadModels();
+          toast('模型列表已刷新', 'success');
+        } catch (e) {
+          toast('模型刷新失败', 'error');
+        } finally {
+          refreshModelsBtn.disabled = false;
+        }
       });
     }
     if (sendBtn) sendBtn.addEventListener('click', sendMessage);

@@ -30,6 +30,18 @@ custom_instruction = ""
 filter_tags = ["xaiartifact","xai:tool_usage_card","grok:render"]
 
 
+# ==================== 模型注册（可选） ====================
+[model_registry]
+# 是否启用基于外部 API Key 同步的模型注册表
+enabled = false
+# 模型来源标识
+source = "xai_openapi"
+# 上次同步时间（unix 秒）
+last_sync_at = 0
+# 远程模型列表（由管理页面同步写入）
+remote_models = []
+
+
 # ==================== 代理配置 ====================
 [proxy]
 # 基础代理地址（代理到 Grok 官网）

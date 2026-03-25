@@ -1128,6 +1128,11 @@ body {
   background: var(--chat-muted);
 }
 
+.model-option.manual {
+  color: #dc2626;
+  font-weight: 600;
+}
+
 .action-icon-btn {
   width: 34px;
   height: 34px;

@@ -6,6 +6,7 @@ from enum import Enum
 from typing import Optional, Tuple, List
 from pydantic import BaseModel, Field
 
+from app.core.config import get_config
 from app.core.exceptions import ValidationException
 
 
@@ -216,9 +217,28 @@ class ModelService:
     _map = {m.model_id: m for m in MODELS}
 
     @classmethod
+    def _resolve_remote_alias(cls, model_id: str) -> Optional[str]:
+        target = str(model_id or "").strip()
+        if not target:
+            return None
+
+        aliases = get_config("model_registry.aliases", {}) or {}
+        if isinstance(aliases, dict):
+            mapped = aliases.get(target)
+            if isinstance(mapped, str) and mapped in cls._map:
+                return mapped
+        return None
+
+    @classmethod
     def get(cls, model_id: str) -> Optional[ModelInfo]:
         """获取模型信息"""
-        return cls._map.get(model_id)
+        model = cls._map.get(model_id)
+        if model:
+            return model
+        alias = cls._resolve_remote_alias(model_id)
+        if alias:
+            return cls._map.get(alias)
+        return None
 
     @classmethod
     def list(cls) -> list[ModelInfo]:
@@ -227,8 +247,8 @@ class ModelService:
 
     @classmethod
     def valid(cls, model_id: str) -> bool:
-        """模型是否有效"""
-        return model_id in cls._map
+        """模型是否有效（含远端模型别名映射）"""
+        return cls.get(model_id) is not None
 
     @classmethod
     def to_grok(cls, model_id: str) -> Tuple[str, str]:
