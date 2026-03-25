@@ -21,6 +21,60 @@ _PUBLIC_MODELS_SOURCES = [
 _MODEL_ID_RE = re.compile(r"\b(grok-[a-z0-9][a-z0-9._-]*)\b", re.I)
 
 
+def _normalize_registry_models(registry: dict[str, Any]) -> list[dict[str, Any]]:
+    """Backward-compatible normalize for remote models storage.
+
+    New compact shape:
+      model_registry.remote_model_ids = ["grok-...", ...]
+
+    Legacy shape:
+      model_registry.remote_models = [{"id": "...", ...}, ...]
+    """
+    if not isinstance(registry, dict):
+        return []
+
+    ids = registry.get("remote_model_ids", [])
+    if isinstance(ids, list):
+        out = []
+        seen = set()
+        for raw in ids:
+            mid = str(raw or "").strip().lower()
+            if not mid or mid in seen:
+                continue
+            seen.add(mid)
+            out.append({
+                "id": mid,
+                "object": "model",
+                "created": int(registry.get("last_sync_at", 0) or 0),
+                "owned_by": "xai_public_docs",
+            })
+        if out:
+            return out
+
+    legacy = registry.get("remote_models", [])
+    if isinstance(legacy, list):
+        out = []
+        seen = set()
+        for item in legacy:
+            if not isinstance(item, dict):
+                continue
+            mid = str(item.get("id") or "").strip().lower()
+            if not mid or mid in seen:
+                continue
+            seen.add(mid)
+            out.append(
+                {
+                    "id": mid,
+                    "object": "model",
+                    "created": int(item.get("created") or 0),
+                    "owned_by": str(item.get("owned_by") or "xai_public_docs"),
+                }
+            )
+        return out
+
+    return []
+
+
 def _local_supported_models() -> set[str]:
     from app.services.grok.services.model import ModelService
 
@@ -95,7 +149,7 @@ async def get_model_registry():
     registry = get_config("model_registry", {}) or {}
     aliases = registry.get("aliases", {}) if isinstance(registry.get("aliases", {}), dict) else {}
     manual_models = registry.get("manual_models", []) if isinstance(registry.get("manual_models", []), list) else []
-    remote_models = registry.get("remote_models", []) or []
+    remote_models = _normalize_registry_models(registry)
     remote_ids = [str(m.get("id") or "") for m in remote_models if isinstance(m, dict)]
 
     supported = _local_supported_models()
@@ -136,12 +190,15 @@ async def discover_model_registry(_: dict[str, Any] | None = None):
     normalized = await _fetch_public_models()
 
     old_registry = get_config("model_registry", {}) or {}
+    sync_at = int(time.time())
     merged = {
         "model_registry": {
             "enabled": True,
             "source": "xai_public_docs",
-            "last_sync_at": int(time.time()),
-            "remote_models": normalized,
+            "last_sync_at": sync_at,
+            "remote_model_ids": [str(item.get("id") or "").strip().lower() for item in normalized if isinstance(item, dict) and str(item.get("id") or "").strip()],
+            # 写入紧凑结构后清空 legacy 字段，避免 config.toml 暴涨
+            "remote_models": [],
             "aliases": old_registry.get("aliases", {}) if isinstance(old_registry.get("aliases", {}), dict) else {},
         }
     }

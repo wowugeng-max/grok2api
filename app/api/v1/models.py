@@ -16,12 +16,17 @@ async def list_models():
     """OpenAI 兼容 models 列表接口"""
     registry = get_config("model_registry", {}) or {}
     enabled = bool(registry.get("enabled", False))
-    remote = registry.get("remote_models", []) if enabled else []
-    remote_ids = {
-        str(item.get("id") or "")
-        for item in remote
-        if isinstance(item, dict) and str(item.get("id") or "")
-    }
+    remote_ids = set()
+    if enabled:
+        compact_ids = registry.get("remote_model_ids", [])
+        if isinstance(compact_ids, list):
+            remote_ids = {str(item or "").strip().lower() for item in compact_ids if str(item or "").strip()}
+        elif isinstance(registry.get("remote_models", []), list):
+            remote_ids = {
+                str(item.get("id") or "").strip().lower()
+                for item in registry.get("remote_models", [])
+                if isinstance(item, dict) and str(item.get("id") or "").strip()
+            }
 
     models = ModelService.list()
     manual_models = registry.get("manual_models", []) if isinstance(registry.get("manual_models", []), list) else []

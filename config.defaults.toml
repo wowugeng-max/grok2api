@@ -32,17 +32,19 @@ filter_tags = ["xaiartifact","xai:tool_usage_card","grok:render"]
 
 # ==================== 模型注册（可选） ====================
 [model_registry]
-# 是否启用基于外部 API Key 同步的模型注册表
+# 是否启用模型注册表过滤
 enabled = false
 # 模型来源标识
-source = "xai_openapi"
+source = "xai_public_docs"
 # 上次同步时间（unix 秒）
 last_sync_at = 0
-# 远程模型列表（由管理页面同步写入）
+# 远程模型ID列表（紧凑存储，避免 config 文件膨胀）
+remote_model_ids = []
+# 兼容旧版本字段（新版本会保持为空）
 remote_models = []
-# 手工添加模型（用于前端下拉展示）
+# 手工添加模型
 manual_models = []
-# 模型别名映射（remote/manual -> 本地可执行模型）
+# 手工别名映射（remote/manual -> 本地可执行模型）
 aliases = {}
 
 
