@@ -660,12 +660,13 @@ body {
 .composer-input {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   background: var(--chat-surface);
   border: 1px solid var(--chat-border);
-  border-radius: 999px;
-  padding: 10px 14px;
+  border-radius: 20px;
+  padding: 14px 18px;
   box-shadow: 0 18px 32px rgba(17, 17, 17, 0.08);
+  min-height: 72px;
 }
 
 .icon-btn {
@@ -691,15 +692,15 @@ body {
 
 .composer-textarea {
   flex: 1;
-  min-height: 40px;
-  height: 40px;
-  max-height: 160px;
+  min-height: 60px;
+  height: 60px;
+  max-height: 220px;
   border: none;
   outline: none;
-  resize: none;
-  font-size: 14px;
-  line-height: 1.4;
-  padding: 10px 0;
+  resize: vertical;
+  font-size: 15px;
+  line-height: 1.5;
+  padding: 12px 0;
   background: transparent;
   color: var(--chat-ink);
   overflow-y: auto;
@@ -812,21 +813,40 @@ body {
 
 .file-badge {
   display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--chat-border);
-  background: #fff;
-  font-size: 12px;
-  color: var(--chat-ink);
-  max-width: 160px;
-  height: 28px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  padding: 8px;
+  border-radius: 10px;
+  border: 1px solid #d6dbe7;
+  background: #ffffff;
+  font-size: 11px;
+  color: #334155;
+  max-width: 120px;
+  min-height: 0;
   flex-shrink: 0;
+  align-self: flex-start;
+  margin-bottom: 4px;
+}
+
+.file-thumb {
+  width: 50px;
+  height: 50px;
+  border-radius: 8px;
+  object-fit: cover;
+  border: 1px solid #d7dce8;
+  display: inline-block;
+}
+
+.file-thumb.hidden {
+  display: none;
 }
 
 .file-name {
-  max-width: 220px;
+  max-width: 96px;
+  font-size: 11px;
+  line-height: 1.2;
+  color: #475569;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -835,9 +855,10 @@ body {
 .file-remove {
   border: none;
   background: transparent;
-  font-size: 14px;
+  font-size: 12px;
   line-height: 1;
-  color: var(--accents-4);
+  color: #64748b;
+  padding: 0;
 }
 
 .meta-btn {
@@ -861,6 +882,15 @@ body {
 
   .composer-input {
     align-items: flex-start;
+    min-height: 84px;
+    padding: 12px 14px;
+  }
+
+  .composer-textarea {
+    min-height: 72px;
+    height: 72px;
+    max-height: 240px;
+    font-size: 15px;
   }
 
   .settings-panel {
@@ -1091,6 +1121,7 @@ body {
 .model-chip {
   cursor: pointer;
   position: relative;
+  z-index: 20;
 }
 
 .model-chip:hover {
@@ -1106,13 +1137,15 @@ body {
   position: absolute;
   bottom: calc(100% + 6px);
   left: 0;
-  min-width: 160px;
+  min-width: 200px;
+  max-height: 260px;
+  overflow-y: auto;
   background: var(--chat-surface);
   border: 1px solid var(--chat-border);
   border-radius: 12px;
   box-shadow: 0 10px 30px rgba(15, 15, 15, 0.08);
   padding: 6px;
-  z-index: 20;
+  z-index: 999;
 }
 
 .model-option {
@@ -1273,7 +1306,7 @@ body {
 
 .message-row.assistant,
 .message-row.user {
-  max-width: 860px;
+  max-width: 1000px;
 }
 
 .message-row.assistant {
@@ -1334,35 +1367,154 @@ body {
 }
 
 .composer-shell {
-  bottom: 14px;
+  bottom: 10px;
   padding: 0 2px;
 }
 
 .composer-input {
-  max-width: 920px;
-  margin: 0 auto;
-  border-radius: 22px;
-  border: 1px solid #e6e2d8;
-  box-shadow: 0 20px 42px rgba(15, 15, 15, 0.12);
-  padding: 10px 12px 10px 14px;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  border-radius: 24px;
+  border: 1px solid #d8deea;
+  background: #f8fafc;
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.05);
+  padding: 8px 12px;
   position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  overflow: visible;
+}
+
+.composer-preview-area {
+  min-height: 0;
+  display: flex;
+  justify-content: flex-start;
+  align-items: flex-start;
+  width: 100%;
+  align-self: stretch;
+}
+
+.composer-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  width: 100%;
+  align-self: stretch;
 }
 
 .composer-textarea {
-  min-height: 44px;
-  height: 44px;
-  max-height: 220px;
+  min-height: 32px;
+  height: 32px;
+  max-height: none;
   font-size: 15px;
+  line-height: 1.35;
+  width: 100%;
+  background: transparent;
+  color: #0f172a;
+  text-align: left;
+  margin: 0;
+  padding-left: 0;
+  align-self: stretch;
+  resize: none;
+  overflow: hidden;
+}
+
+.composer-textarea::placeholder {
+  color: #94a3b8;
+}
+
+.composer-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+}
+
+.composer-tools-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  flex-wrap: nowrap;
+  overflow: visible;
+  padding-bottom: 1px;
+}
+
+.composer-tools-left #modelChip {
+  margin-left: auto;
+}
+
+.composer-tools-left #refreshModelsBtn {
+  margin-left: 4px;
+}
+
+.composer-send-right {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+}
+
+.quick-plus-btn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: #dbe0ea;
+  font-size: 24px;
+  line-height: 1;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.composer-divider {
+  width: 1px;
+  height: 16px;
+  background: #2f333c;
+  margin: 0 2px;
+  flex-shrink: 0;
+}
+
+.quick-action-btn {
+  border: none;
+  background: transparent;
+  color: #475569;
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.quick-action-btn:hover {
+  background: #e8edf5;
+}
+
+.subtle-icon-btn {
+  border-color: #d4dbe8;
+  background: #ffffff;
+  width: 30px;
+  height: 30px;
+  color: #64748b;
+}
+
+.send-up-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  border: none;
+  background: #1f6fff;
+  color: #ffffff;
+  box-shadow: 0 4px 10px rgba(31, 111, 255, 0.22);
 }
 
 .composer-hint {
-  position: absolute;
-  left: 58px;
-  bottom: 6px;
-  font-size: 11px;
-  color: var(--accents-4);
-  pointer-events: none;
-  transition: opacity 0.16s ease;
+  display: none;
 }
 
 .composer-input.has-value .composer-hint,
@@ -1373,21 +1525,24 @@ body {
 .icon-btn,
 .send-btn,
 .model-chip {
-  height: 38px;
+  height: 30px;
 }
 
 .icon-btn,
 .send-btn {
-  width: 38px;
+  width: 30px;
 }
 
 .send-btn {
-  box-shadow: 0 6px 18px rgba(17, 17, 17, 0.25);
+  box-shadow: none;
 }
 
 .model-chip {
-  border-radius: 12px;
-  padding: 8px 10px;
+  border-radius: 999px;
+  padding: 4px 8px;
+  border-color: #d4dbe8;
+  background: #ffffff;
+  color: #334155;
 }
 
 .settings-panel {

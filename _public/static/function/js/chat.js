@@ -21,6 +21,7 @@
   const attachBtn = document.getElementById('attachBtn');
   const fileInput = document.getElementById('fileInput');
   const fileBadge = document.getElementById('fileBadge');
+  const fileThumb = document.getElementById('fileThumb');
   const fileName = document.getElementById('fileName');
   const fileRemoveBtn = document.getElementById('fileRemoveBtn');
   const chatSidebar = document.getElementById('chatSidebar');
@@ -428,8 +429,16 @@
     if (sendBtn) sendBtn.disabled = sending;
   }
 
+  function autoGrowPromptInput() {
+    if (!promptInput) return;
+    promptInput.style.height = 'auto';
+    const next = Math.max(32, promptInput.scrollHeight || 32);
+    promptInput.style.height = `${next}px`;
+  }
+
   function updateComposerState() {
     if (!promptInput) return;
+    autoGrowPromptInput();
     const composer = promptInput.closest('.composer-input');
     if (!composer) return;
     const hasValue = !!promptInput.value.trim();
@@ -1439,7 +1448,8 @@
           const mid = String(item.id || '');
           if (!mid) return false;
           if (mid.includes('video')) return false;
-          if (item.executable === false) return false;
+          // 允许手工添加模型出现在下拉（即使未做本地映射 executable=false）
+          if (item.executable === false && !item.manual) return false;
           if (dedup.has(mid)) return false;
           dedup.add(mid);
           return true;
@@ -1474,12 +1484,28 @@
 
   function showAttachmentBadge() {
     if (!fileBadge || !fileName) return;
+    const composer = promptInput ? promptInput.closest('.composer-input') : null;
     if (attachment) {
       fileName.textContent = attachment.name;
       fileBadge.classList.remove('hidden');
+      if (composer) composer.classList.add('has-attachment');
+      if (fileThumb) {
+        if (typeof attachment.data === 'string' && attachment.data.startsWith('data:image/')) {
+          fileThumb.src = attachment.data;
+          fileThumb.classList.remove('hidden');
+        } else {
+          fileThumb.removeAttribute('src');
+          fileThumb.classList.add('hidden');
+        }
+      }
     } else {
       fileBadge.classList.add('hidden');
       fileName.textContent = '';
+      if (composer) composer.classList.remove('has-attachment');
+      if (fileThumb) {
+        fileThumb.removeAttribute('src');
+        fileThumb.classList.add('hidden');
+      }
     }
   }
 
@@ -1510,6 +1536,19 @@
     } catch (e) {
       toast(t('common.fileReadFailed'), 'error');
     }
+  }
+
+  function extractImageFileFromClipboard(event) {
+    const clipboardData = event && event.clipboardData;
+    if (!clipboardData || !clipboardData.items) return null;
+    const items = Array.from(clipboardData.items);
+    for (const item of items) {
+      if (item && item.kind === 'file' && String(item.type || '').startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) return file;
+      }
+    }
+    return null;
   }
 
   function createActionButton(label, title, onClick) {
@@ -1951,6 +1990,13 @@
           event.preventDefault();
           sendMessage();
         }
+      });
+      promptInput.addEventListener('paste', async (event) => {
+        const file = extractImageFileFromClipboard(event);
+        if (!file) return;
+        event.preventDefault();
+        await handleFileSelect(file);
+        toast('已粘贴图片，可直接发送', 'success');
       });
     }
     if (attachBtn && fileInput) {

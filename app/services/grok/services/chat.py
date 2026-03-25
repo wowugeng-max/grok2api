@@ -250,6 +250,20 @@ class MessageExtractor:
         return combined, file_attachments, image_attachments
 
 
+def _resolve_text_model_runtime(model_id: str) -> tuple[str, str]:
+    """Resolve model/mode for text models, allowing dynamic grok-* IDs."""
+    model_info = ModelService.get(model_id)
+    if model_info:
+        return model_info.grok_model, model_info.model_mode
+
+    mid = str(model_id or "").strip().lower()
+    if mid.startswith("grok-") and "imagine" not in mid:
+        # 动态文本模型：直接透传到 reverse，默认使用 fast mode
+        return model_id, "MODEL_MODE_FAST"
+
+    raise ValidationException(f"Unknown model: {model_id}")
+
+
 class GrokChatService:
     """Grok API 调用服务"""
 
@@ -325,12 +339,7 @@ class GrokChatService:
         parallel_tool_calls: bool = True,
     ):
         """OpenAI 兼容接口"""
-        model_info = ModelService.get(model)
-        if not model_info:
-            raise ValidationException(f"Unknown model: {model}")
-
-        grok_model = model_info.grok_model
-        mode = model_info.model_mode
+        grok_model, mode = _resolve_text_model_runtime(model)
         # 提取消息和附件
         message, file_attachments, image_attachments = MessageExtractor.extract(
             messages, tools=tools, tool_choice=tool_choice, parallel_tool_calls=parallel_tool_calls

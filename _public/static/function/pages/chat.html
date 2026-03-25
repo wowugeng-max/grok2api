@@ -18,7 +18,7 @@
   <div id="toast-container" class="toast-container"></div>
   <div id="app-header"></div>
 
-  <main class="flex-1 container mx-auto max-w-5xl px-6 py-8 fade-in chat-main">
+  <main class="flex-1 container mx-auto max-w-7xl px-6 py-8 fade-in chat-main">
     <div class="chat-layout">
       <aside class="chat-sidebar" id="chatSidebar">
         <div class="sidebar-header">
@@ -72,82 +72,51 @@
 
       <div class="composer-shell">
         <div class="composer-input">
-          <button id="attachBtn" class="icon-btn" type="button" title="上传文件" data-i18n-title="chat.uploadFile">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
-              stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21.44 11.05l-9.19 9.19a5 5 0 0 1-7.07-7.07l9.9-9.9a3.5 3.5 0 0 1 4.95 4.95l-9.9 9.9a2 2 0 0 1-2.83-2.83l8.49-8.49"></path>
-            </svg>
-          </button>
-          <input id="fileInput" class="file-input" type="file" />
-          <div id="fileBadge" class="file-badge hidden">
-            <span id="fileName" class="file-name"></span>
-            <button id="fileRemoveBtn" class="file-remove" type="button">×</button>
-          </div>
-          <textarea id="promptInput" class="composer-textarea" placeholder="询问任何内容" data-i18n-placeholder="chat.placeholder"></textarea>
-          <div class="composer-hint" id="composerHint">Enter 发送 · Shift+Enter 换行</div>
-          <div class="composer-actions">
-            <div class="model-chip" id="modelChip">
-              <svg class="model-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-                <line x1="8" y1="21" x2="16" y2="21"></line>
-                <line x1="12" y1="17" x2="12" y2="21"></line>
-              </svg>
-              <span class="model-label" id="modelLabel">grok-4.20-beta</span>
-              <svg class="model-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="6 9 12 15 18 9"></polyline>
-              </svg>
-              <div class="model-dropdown hidden" id="modelDropdown"></div>
+          <div class="composer-preview-area">
+            <div id="fileBadge" class="file-badge hidden">
+              <img id="fileThumb" class="file-thumb hidden" alt="preview" />
+              <span id="fileName" class="file-name"></span>
+              <button id="fileRemoveBtn" class="file-remove" type="button">×</button>
             </div>
-            <button id="refreshModelsBtn" class="icon-btn" type="button" title="刷新模型" aria-label="刷新模型">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="23 4 23 10 17 10"></polyline>
-                <polyline points="1 20 1 14 7 14"></polyline>
-                <path d="M3.51 9a9 9 0 0 1 14.13-3.36L23 10M1 14l5.36 4.36A9 9 0 0 0 20.49 15"></path>
-              </svg>
-            </button>
-            <div class="popover hidden">
-              <button id="settingsToggle" class="icon-btn" type="button" title="设置" data-i18n-title="chat.settings">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
-                  stroke-linecap="round" stroke-linejoin="round">
-                  <circle cx="12" cy="12" r="3"></circle>
-                  <path
-                    d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 9 4.6V4a2 2 0 0 1 4 0v.09c0 .69.4 1.31 1.02 1.58.52.23 1.12.2 1.6-.07l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06c-.45.45-.58 1.12-.33 1.72.25.6.82 1 1.51 1H21a2 2 0 0 1 0 4h-.09c-.69 0-1.31.4-1.51 1Z">
-                  </path>
+          </div>
+
+          <div class="composer-top">
+            <textarea id="promptInput" class="composer-textarea" placeholder="询问任何内容" data-i18n-placeholder="chat.placeholder"></textarea>
+          </div>
+          <div class="composer-hint" id="composerHint">Enter 发送 · Shift+Enter 换行</div>
+
+          <div class="composer-bottom">
+            <div class="composer-actions composer-tools-left">
+              <button id="attachBtn" class="icon-btn" type="button" title="上传文件" data-i18n-title="chat.uploadFile">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21.44 11.05l-9.19 9.19a5 5 0 0 1-7.07-7.07l9.9-9.9a3.5 3.5 0 0 1 4.95 4.95l-9.9 9.9a2 2 0 0 1-2.83-2.83l8.49-8.49"></path>
                 </svg>
               </button>
-              <div id="settingsPanel" class="settings-panel hidden">
-                <div class="settings-grid">
-                  <div class="settings-block">
-                    <label class="field-label" for="tempRange" data-i18n="chat.temperature">温度</label>
-                    <div class="range-row">
-                      <input id="tempRange" type="range" min="0" max="2" step="0.05" value="0.8">
-                      <span id="tempValue" class="range-value">0.8</span>
-                    </div>
-                  </div>
-                  <div class="settings-block">
-                    <label class="field-label" for="topPRange" data-i18n="chat.topP">Top P</label>
-                    <div class="range-row">
-                      <input id="topPRange" type="range" min="0" max="1" step="0.05" value="0.95">
-                      <span id="topPValue" class="range-value">0.95</span>
-                    </div>
-                  </div>
-                  <div class="settings-block settings-block-full">
-                    <label class="field-label" for="systemInput" data-i18n="chat.systemPrompt">System Prompt</label>
-                    <textarea id="systemInput" class="geist-input chat-input" placeholder="可选，设置系统提示词" data-i18n-placeholder="chat.systemPromptPlaceholder"></textarea>
-                  </div>
-                </div>
+              <input id="fileInput" class="file-input" type="file" />
+              <div class="model-chip" id="modelChip">
+                <span class="model-label" id="modelLabel">grok-4.20-beta</span>
+                <svg class="model-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="6 9 12 15 18 9"></polyline>
+                </svg>
+                <div class="model-dropdown hidden" id="modelDropdown"></div>
               </div>
+              <button id="refreshModelsBtn" class="icon-btn" type="button" title="刷新模型" aria-label="刷新模型">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="23 4 23 10 17 10"></polyline>
+                  <polyline points="1 20 1 14 7 14"></polyline>
+                  <path d="M3.51 9a9 9 0 0 1 14.13-3.36L23 10M1 14l5.36 4.36A9 9 0 0 0 20.49 15"></path>
+                </svg>
+              </button>
             </div>
-            <button id="sendBtn" class="send-btn" type="button" aria-label="Send" title="发送" data-i18n-title="chat.send" data-i18n-aria-label="chat.send">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                stroke-linecap="round" stroke-linejoin="round">
-                <path d="M22 2L11 13"></path>
-                <path d="M22 2L15 22L11 13L2 9L22 2Z"></path>
-              </svg>
-            </button>
+            <div class="composer-send-right">
+              <button id="sendBtn" class="send-btn send-up-btn" type="button" aria-label="Send" title="发送" data-i18n-title="chat.send" data-i18n-aria-label="chat.send">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="12" y1="18" x2="12" y2="6"></line>
+                  <polyline points="7 11 12 6 17 11"></polyline>
+                </svg>
+              </button>
+            </div>
           </div>
-        </div>
       </div>
       </div>
     </div>

@@ -165,9 +165,10 @@ async def upsert_manual_model(data: dict[str, Any]):
     model_id = str((data or {}).get("id") or "").strip().lower()
     model_name = str((data or {}).get("name") or "").strip()
     mapped_to = str((data or {}).get("mapped_to") or "").strip()
-    if not model_id or not model_name or not mapped_to:
-        raise HTTPException(status_code=400, detail="id, name and mapped_to are required")
-    if mapped_to not in {m.model_id for m in ModelService.list()}:
+    if not model_id or not model_name:
+        raise HTTPException(status_code=400, detail="id and name are required")
+
+    if mapped_to and mapped_to not in {m.model_id for m in ModelService.list()}:
         raise HTTPException(status_code=400, detail=f"mapped_to not supported: {mapped_to}")
 
     registry = get_config("model_registry", {}) or {}
@@ -187,10 +188,13 @@ async def upsert_manual_model(data: dict[str, Any]):
     if not replaced:
         kept.append({"id": model_id, "name": model_name})
 
-    aliases[model_id] = mapped_to
+    if mapped_to:
+        aliases[model_id] = mapped_to
+    else:
+        aliases.pop(model_id, None)
 
     await config.update({"model_registry": {"manual_models": kept, "aliases": aliases}})
-    return {"status": "success", "manual_models": kept, "mapped_to": mapped_to}
+    return {"status": "success", "manual_models": kept, "mapped_to": mapped_to or None}
 
 
 @router.post("/models/registry/manual/delete", dependencies=[Depends(verify_app_key)])

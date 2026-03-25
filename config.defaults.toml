@@ -40,6 +40,10 @@ source = "xai_openapi"
 last_sync_at = 0
 # 远程模型列表（由管理页面同步写入）
 remote_models = []
+# 手工添加模型（用于前端下拉展示）
+manual_models = []
+# 模型别名映射（remote/manual -> 本地可执行模型）
+aliases = {}
 
 
 # ==================== 代理配置 ====================

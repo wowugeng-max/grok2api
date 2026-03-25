@@ -1,4 +1,6 @@
 let apiKey = '';
+let lastRegistryModels = [];
+const selectedRemoteModelIds = new Set();
 
 const byId = (id) => document.getElementById(id);
 
@@ -17,13 +19,16 @@ function renderRegistry(data) {
   if (!body || !meta) return;
 
   const models = Array.isArray(data.models) ? data.models : [];
+  lastRegistryModels = models;
   const manualModels = Array.isArray(data.manual_models) ? data.manual_models : [];
   const aliases = data.aliases || {};
   const localModels = Array.isArray(data.local_models) ? data.local_models : [];
-  meta.textContent = `enabled=${!!data.enabled} · source=${data.source || '-'} · last_sync=${fmtTs(data.last_sync_at)} · remote=${data.remote_count || 0} · supported=${data.supported_count || 0}`;
+  meta.textContent = `enabled=${!!data.enabled} · source=${data.source || '-'} · last_sync=${fmtTs(data.last_sync_at)} · remote=${data.remote_count || 0} · supported=${data.supported_count || 0} · manual=${manualModels.length} · selected=${selectedRemoteModelIds.size}`;
 
   if (mappedToSelect) {
-    mappedToSelect.innerHTML = localModels.map((m) => `<option value="${m}">${m}</option>`).join('');
+    mappedToSelect.innerHTML = ['<option value="">(不映射，仅加入下拉)</option>']
+      .concat(localModels.map((m) => `<option value="${m}">${m}</option>`))
+      .join('');
   }
 
   if (aliasList) {
@@ -37,19 +42,36 @@ function renderRegistry(data) {
   }
 
   if (!models.length) {
-    body.innerHTML = `<tr><td colspan="5" class="py-4 text-[var(--accents-4)]">暂无模型数据</td></tr>`;
+    body.innerHTML = `<tr><td colspan="6" class="py-4 text-[var(--accents-4)]">暂无模型数据</td></tr>`;
     return;
   }
 
-  body.innerHTML = models.map((m) => `
+  body.innerHTML = models.map((m) => {
+    const id = String(m.id || '');
+    const checked = selectedRemoteModelIds.has(id) ? 'checked' : '';
+    return `
     <tr class="border-b border-[var(--border)]">
-      <td class="py-2 pr-3 font-mono text-xs">${m.id || ''}</td>
+      <td class="py-2 pr-3"><input type="checkbox" class="remote-model-checkbox" data-model-id="${id}" ${checked} /></td>
+      <td class="py-2 pr-3 font-mono text-xs">${id}</td>
       <td class="py-2 pr-3">${m.owned_by || '-'}</td>
       <td class="py-2 pr-3">${m.supported ? '是' : '否'}</td>
       <td class="py-2 pr-3">${m.executable ? '是' : '否'}</td>
       <td class="py-2 pr-3 font-mono text-xs">${m.mapped_to || '-'}</td>
     </tr>
-  `).join('');
+  `;
+  }).join('');
+
+  body.querySelectorAll('.remote-model-checkbox').forEach((el) => {
+    el.addEventListener('change', () => {
+      const modelId = String(el.getAttribute('data-model-id') || '').trim();
+      if (!modelId) return;
+      if (el.checked) selectedRemoteModelIds.add(modelId);
+      else selectedRemoteModelIds.delete(modelId);
+      if (meta) {
+        meta.textContent = `enabled=${!!data.enabled} · source=${data.source || '-'} · last_sync=${fmtTs(data.last_sync_at)} · remote=${data.remote_count || 0} · supported=${data.supported_count || 0} · manual=${manualModels.length} · selected=${selectedRemoteModelIds.size}`;
+      }
+    });
+  });
 }
 
 async function loadRegistry() {
@@ -99,9 +121,15 @@ async function saveManual() {
   const modelId = (byId('manual-model-id')?.value || '').trim();
   const modelName = (byId('manual-model-name')?.value || '').trim();
   const mappedTo = (byId('manual-mapped-to')?.value || '').trim();
-  if (!modelId || !modelName || !mappedTo) {
-    showToast('模型ID、模型名称和映射目标不能为空', 'error');
+  const mappingEnabled = !!byId('manual-enable-mapping')?.checked;
+  if (!modelId || !modelName) {
+    showToast('模型ID和模型名称不能为空', 'error');
     return;
+  }
+
+  const payload = { id: modelId, name: modelName };
+  if (mappingEnabled && mappedTo) {
+    payload.mapped_to = mappedTo;
   }
 
   const res = await fetch('/v1/admin/models/registry/manual/upsert', {
@@ -110,7 +138,7 @@ async function saveManual() {
       'Content-Type': 'application/json',
       ...buildAuthHeaders(apiKey)
     },
-    body: JSON.stringify({ id: modelId, name: modelName, mapped_to: mappedTo })
+    body: JSON.stringify(payload)
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -121,7 +149,7 @@ async function saveManual() {
   if (mapped) {
     showToast(`手工模型已添加，并映射到 ${mapped}`, 'success');
   } else {
-    showToast('手工模型已添加', 'success');
+    showToast('手工模型已添加（仅下拉展示，不映射本地）', 'success');
   }
   const inputId = byId('manual-model-id');
   const inputName = byId('manual-model-name');
@@ -151,6 +179,45 @@ async function deleteManual() {
     return;
   }
   showToast('手工模型已删除', 'success');
+  await loadRegistry();
+}
+
+async function selectAllVisible() {
+  for (const m of lastRegistryModels) {
+    const id = String((m && m.id) || '').trim();
+    if (id) selectedRemoteModelIds.add(id);
+  }
+  await loadRegistry();
+}
+
+async function clearSelection() {
+  selectedRemoteModelIds.clear();
+  await loadRegistry();
+}
+
+async function batchAddSelected() {
+  const ids = [...selectedRemoteModelIds];
+  if (!ids.length) {
+    showToast('请先勾选至少一个模型', 'error');
+    return;
+  }
+
+  let ok = 0;
+  let failed = 0;
+  for (const id of ids) {
+    const res = await fetch('/v1/admin/models/registry/manual/upsert', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...buildAuthHeaders(apiKey)
+      },
+      body: JSON.stringify({ id, name: id })
+    });
+    if (res.ok) ok += 1;
+    else failed += 1;
+  }
+
+  showToast(`批量添加完成：成功 ${ok}，失败 ${failed}`, failed ? 'warning' : 'success');
   await loadRegistry();
 }
 
@@ -205,6 +272,9 @@ async function init() {
   byId('disable-btn')?.addEventListener('click', disableRegistry);
   byId('save-manual-btn')?.addEventListener('click', saveManual);
   byId('delete-manual-btn')?.addEventListener('click', deleteManual);
+  byId('select-all-btn')?.addEventListener('click', selectAllVisible);
+  byId('clear-selection-btn')?.addEventListener('click', clearSelection);
+  byId('batch-add-btn')?.addEventListener('click', batchAddSelected);
 
   await loadRegistry();
 }

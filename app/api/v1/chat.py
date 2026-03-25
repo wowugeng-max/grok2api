@@ -83,6 +83,16 @@ ALLOWED_IMAGE_SIZES = {
 IMAGINE_FAST_MODEL_ID = "grok-imagine-1.0-fast"
 
 
+def _allow_dynamic_text_model(model_id: str) -> bool:
+    mid = str(model_id or "").strip().lower()
+    if not mid.startswith("grok-"):
+        return False
+    # 图片/视频模型仍然走内置严格校验
+    if "imagine" in mid:
+        return False
+    return True
+
+
 def _validate_media_input(value: str, field_name: str, param: str):
     """Verify media input is a valid URL or data URI"""
     if not isinstance(value, str) or not value.strip():
@@ -283,7 +293,7 @@ def _validate_image_config(image_conf: ImageConfig, *, stream: bool):
 def validate_request(request: ChatCompletionRequest):
     """验证请求参数"""
     # 验证模型
-    if not ModelService.valid(request.model):
+    if not ModelService.valid(request.model) and not _allow_dynamic_text_model(request.model):
         raise ValidationException(
             message=f"The model `{request.model}` does not exist or you do not have access to it.",
             param="model",
