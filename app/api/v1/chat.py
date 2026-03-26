@@ -716,7 +716,31 @@ async def chat_completions(request: ChatCompletionRequest):
     # 参数验证
     validate_request(request)
 
-    logger.debug(f"Chat request: model={request.model}, stream={request.stream}")
+    logger.debug(
+        "Chat request body summary",
+        extra={
+            "chat_request": {
+                "model": request.model,
+                "stream": request.stream,
+                "reasoning_effort": request.reasoning_effort,
+                "temperature": request.temperature,
+                "top_p": request.top_p,
+                "tools_count": len(request.tools or []),
+                "tools": request.tools or [],
+                "tool_choice": request.tool_choice,
+                "parallel_tool_calls": request.parallel_tool_calls,
+                "messages_count": len(request.messages or []),
+            }
+        },
+    )
+    if get_config("log.log_all_requests"):
+        try:
+            logger.info(
+                "Chat request body raw",
+                extra={"chat_request_raw": request.model_dump()},
+            )
+        except Exception:
+            pass
 
     # 检测模型类型
     model_info = ModelService.get(request.model)

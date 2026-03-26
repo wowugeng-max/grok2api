@@ -9,6 +9,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.core.exceptions import ValidationException
+from app.core.config import get_config
+from app.core.logger import logger
 from app.services.grok.services.responses import ResponsesService
 
 
@@ -48,6 +50,32 @@ async def create_response(request: ResponseCreateRequest):
     reasoning_effort = None
     if isinstance(request.reasoning, dict):
         reasoning_effort = request.reasoning.get("effort") or request.reasoning.get("reasoning_effort")
+
+    logger.debug(
+        "Responses request body summary",
+        extra={
+            "responses_request": {
+                "model": request.model,
+                "stream": request.stream,
+                "temperature": request.temperature,
+                "top_p": request.top_p,
+                "reasoning": request.reasoning,
+                "tools_count": len(request.tools or []),
+                "tools": request.tools or [],
+                "tool_choice": request.tool_choice,
+                "parallel_tool_calls": request.parallel_tool_calls,
+                "has_input": request.input is not None,
+            }
+        },
+    )
+    if get_config("log.log_all_requests"):
+        try:
+            logger.info(
+                "Responses request body raw",
+                extra={"responses_request_raw": request.model_dump()},
+            )
+        except Exception:
+            pass
 
     result = await ResponsesService.create(
         model=request.model,
