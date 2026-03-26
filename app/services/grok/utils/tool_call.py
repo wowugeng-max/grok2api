@@ -10,6 +10,33 @@ import re
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.core.logger import logger
+
+
+def _normalize_tool_function(tool: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize tool schema from either Chat Completions or Responses format.
+
+    Supported inputs:
+    - {"type":"function", "function": {"name": ..., "description": ..., "parameters": ...}}
+    - {"type":"function", "name": ..., "description": ..., "parameters": ...}
+    """
+    if not isinstance(tool, dict):
+        return {}
+
+    func = tool.get("function")
+    if isinstance(func, dict):
+        return {
+            "name": func.get("name", ""),
+            "description": func.get("description", ""),
+            "parameters": func.get("parameters", {}) or {},
+        }
+
+    return {
+        "name": tool.get("name", ""),
+        "description": tool.get("description", ""),
+        "parameters": tool.get("parameters", {}) or {},
+    }
+
 
 def build_tool_prompt(
     tools: List[Dict[str, Any]],
@@ -52,13 +79,17 @@ def build_tool_prompt(
     # Describe each tool
     lines.append("## Tool Definitions")
     lines.append("")
+    normalized_names: List[str] = []
     for tool in tools:
         if tool.get("type") != "function":
             continue
-        func = tool.get("function", {})
+        func = _normalize_tool_function(tool)
         name = func.get("name", "")
         desc = func.get("description", "")
         params = func.get("parameters", {})
+
+        if name:
+            normalized_names.append(name)
 
         lines.append(f"### {name}")
         if desc:
@@ -66,6 +97,13 @@ def build_tool_prompt(
         if params:
             lines.append(f"Parameters: {json.dumps(params, ensure_ascii=False)}")
         lines.append("")
+
+    logger.debug(
+        "Tool prompt normalized: input_tools=%s function_tools=%s names=%s",
+        len(tools or []),
+        len(normalized_names),
+        normalized_names,
+    )
 
     # Handle tool_choice directives
     if tool_choice == "required":
@@ -78,9 +116,13 @@ def build_tool_prompt(
     else:
         # "auto" or default
         lines.append("Decide whether to call a tool based on the user's request. If you don't need a tool, respond normally with text only.")
+        lines.append(
+            "IMPORTANT: If the user asks you to perform external actions (file create/edit/delete, run commands, web fetch/search, or session/process operations), you MUST emit the corresponding <tool_call> block(s) instead of only describing the result in text."
+        )
 
     lines.append("")
     lines.append("When you call a tool, you may include text before or after the <tool_call> blocks, but the tool call blocks must be valid JSON.")
+    lines.append("Never claim an action succeeded unless you emitted the corresponding <tool_call> in the same response and received a successful tool result.")
 
     return "\n".join(lines)
 
@@ -186,7 +228,7 @@ def parse_tool_call_block(
     valid_names = set()
     if tools:
         for tool in tools:
-            func = tool.get("function", {})
+            func = _normalize_tool_function(tool)
             tool_name = func.get("name")
             if tool_name:
                 valid_names.add(tool_name)

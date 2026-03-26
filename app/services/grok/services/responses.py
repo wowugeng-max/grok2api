@@ -695,6 +695,11 @@ class ResponsesService:
         normalized_tools = _normalize_tools_for_chat(tools)
         normalized_tool_choice = _normalize_tool_choice(tool_choice)
 
+        # OpenClaw-like agent scenes usually expect real tool execution when tools are provided.
+        # If client does not set tool_choice explicitly, default to required to avoid "text-only fake execution".
+        if normalized_tools and normalized_tool_choice is None:
+            normalized_tool_choice = "required"
+
         chat_kwargs: Dict[str, Any] = {
             "model": model,
             "messages": messages,
