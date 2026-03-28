@@ -855,12 +855,25 @@ class TokenManager:
         Returns:
             是否成功
         """
+        raw_token = token[4:] if isinstance(token, str) and token.startswith("sso=") else token
+        candidates = [raw_token]
+        if isinstance(raw_token, str):
+            candidates.append(f"sso={raw_token}")
+
+        removed_any = False
         for pool_name, pool in self.pools.items():
-            if pool.remove(token):
-                self._track_token_delete(token)
-                await self._save(force=True)
+            removed = False
+            for candidate in candidates:
+                if pool.remove(candidate):
+                    removed = True
+            if removed:
+                removed_any = True
+                self._track_token_delete(raw_token)
                 logger.info(f"Pool '{pool_name}': token removed")
-                return True
+
+        if removed_any:
+            await self._save(force=True)
+            return True
 
         logger.warning("Token not found for removal")
         return False
