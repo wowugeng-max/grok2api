@@ -51,24 +51,24 @@ async def create_response(request: ResponseCreateRequest):
     if isinstance(request.reasoning, dict):
         reasoning_effort = request.reasoning.get("effort") or request.reasoning.get("reasoning_effort")
 
-    logger.debug(
-        "Responses request body summary",
-        extra={
-            "responses_request": {
-                "model": request.model,
-                "stream": request.stream,
-                "temperature": request.temperature,
-                "top_p": request.top_p,
-                "reasoning": request.reasoning,
-                "tools_count": len(request.tools or []),
-                "tools": request.tools or [],
-                "tool_choice": request.tool_choice,
-                "parallel_tool_calls": request.parallel_tool_calls,
-                "has_input": request.input is not None,
-            }
-        },
-    )
-    if get_config("log.log_all_requests"):
+    if get_config("log.log_responses_request_body", False):
+        logger.debug(
+            "Responses request body summary",
+            extra={
+                "responses_request": {
+                    "model": request.model,
+                    "stream": request.stream,
+                    "temperature": request.temperature,
+                    "top_p": request.top_p,
+                    "reasoning": request.reasoning,
+                    "tools_count": len(request.tools or []),
+                    "tool_choice": request.tool_choice,
+                    "parallel_tool_calls": request.parallel_tool_calls,
+                    "has_input": request.input is not None,
+                }
+            },
+        )
+    if get_config("log.log_all_requests") and get_config("log.log_responses_request_body", False):
         try:
             logger.info(
                 "Responses request body raw",
