@@ -58,6 +58,8 @@ async def get_tokens():
     # 获取消耗模式配置
     from app.core.config import get_config
     mgr = await get_token_manager()
+    # 管理页要求强一致：每次读取前强制重载，避免多 worker 下出现“删除后又出现”
+    await mgr.reload()
     results = {}
     for pool_name, pool in mgr.pools.items():
         results[pool_name] = [t.model_dump() for t in pool.list()]
