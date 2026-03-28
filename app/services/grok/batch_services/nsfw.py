@@ -44,6 +44,13 @@ class NSFWService:
             try:
                 browser = get_config("proxy.browser")
                 async with ResettableSession(impersonate=browser) as session:
+                    def _is_email_domain_rejected(err: UpstreamException) -> bool:
+                        details = err.details if isinstance(err.details, dict) else {}
+                        grpc_message = str(details.get("grpc_message") or "").lower()
+                        message = str(err).lower()
+                        marker = "email-domain-rejected"
+                        return marker in grpc_message or marker in message
+
                     async def _record_fail(err: UpstreamException, reason: str):
                         status = None
                         if err.details and "status" in err.details:
@@ -52,6 +59,8 @@ class NSFWService:
                             status = getattr(err, "status_code", None)
                         if status == 401:
                             await mgr.record_fail(token, status, reason)
+                        if _is_email_domain_rejected(err):
+                            await mgr.mark_banned(token, "email_domain_rejected")
                         return status or 0
 
                     try:

@@ -814,8 +814,22 @@ async function saveEdit() {
 async function deleteToken(index) {
   const ok = await confirmAction(t('token.confirmDelete'), { okText: t('common.delete') });
   if (!ok) return;
+
+  const target = flatTokens[index];
+  if (!target) return;
+
+  const previous = [...flatTokens];
   flatTokens.splice(index, 1);
-  syncToServer().then(loadData);
+
+  try {
+    await syncToServer({ strict: true });
+    await loadData();
+    showToast(t('token.deleteDone'), 'success');
+  } catch (e) {
+    flatTokens = previous;
+    await loadData();
+    showToast(t('common.deleteFailed'), 'error');
+  }
 }
 
 async function toggleTokenEnabled(index) {
@@ -883,7 +897,8 @@ async function batchEnableTokens() {
 }
 
 // Reconstruct object structure and save
-async function syncToServer() {
+async function syncToServer(options = {}) {
+  const strict = !!options.strict;
   const newTokens = {};
   flatTokens.forEach(t => {
     if (!newTokens[t.pool]) newTokens[t.pool] = [];
@@ -915,9 +930,20 @@ async function syncToServer() {
       },
       body: JSON.stringify(newTokens)
     });
-    if (!res.ok) showToast(t('common.saveFailed'), 'error');
+    if (!res.ok) {
+      if (strict) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      showToast(t('common.saveFailed'), 'error');
+      return false;
+    }
+    return true;
   } catch (e) {
+    if (strict) {
+      throw e;
+    }
     showToast(t('common.saveError', { msg: e.message }), 'error');
+    return false;
   }
 }
 
@@ -1296,6 +1322,115 @@ async function batchUpdate() {
   startBatchRefresh();
 }
 
+async function startCleanupInvalidTokens() {
+  if (isBatchProcessing) {
+    showToast(t('common.taskInProgress'), 'info');
+    return;
+  }
+
+  const invalidCount = flatTokens.filter(t => t.status === 'disabled' || t.status === 'expired').length;
+  if (invalidCount === 0) {
+    showToast('当前没有失效 Token 可清理', 'info');
+    return;
+  }
+
+  const ok = await confirmAction(`确认自动清理失效 Token？共 ${invalidCount} 个。`, { okText: '开始清理' });
+  if (!ok) return;
+
+  const btn = byId('btn-cleanup-invalid');
+  if (btn) btn.disabled = true;
+
+  isBatchProcessing = true;
+  isBatchPaused = false;
+  currentBatchAction = 'cleanup_invalid';
+  batchTotal = invalidCount;
+  batchProcessed = 0;
+  updateBatchProgress();
+  setActionButtonsState();
+
+  try {
+    const res = await fetch('/v1/admin/tokens/cleanup-invalid/async', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...buildAuthHeaders(apiKey)
+      },
+      body: JSON.stringify({})
+    });
+
+    const data = await readJsonResponse(res);
+    if (!res.ok || !data || data.status !== 'success') {
+      throw new Error((data && (data.detail || data.message)) || `HTTP ${res.status}`);
+    }
+
+    if (!data.task_id) {
+      finishBatchProcess(false, { silent: true });
+      showToast(data.message || '没有需要清理的失效 Token', 'info');
+      if (btn) btn.disabled = false;
+      setActionButtonsState();
+      await loadData();
+      return;
+    }
+
+    currentBatchTaskId = data.task_id;
+    BatchSSE.close(batchEventSource);
+    batchEventSource = BatchSSE.open(currentBatchTaskId, apiKey, {
+      onMessage: (msg) => {
+        if (msg.type === 'snapshot' || msg.type === 'progress') {
+          if (typeof msg.total === 'number') batchTotal = msg.total;
+          if (typeof msg.processed === 'number') batchProcessed = msg.processed;
+          updateBatchProgress();
+        } else if (msg.type === 'done') {
+          if (typeof msg.total === 'number') batchTotal = msg.total;
+          batchProcessed = batchTotal;
+          updateBatchProgress();
+          finishBatchProcess(false, { silent: true });
+          const summary = msg.result && msg.result.summary ? msg.result.summary : null;
+          const deleted = summary ? Number(summary.deleted || 0) : 0;
+          const failed = summary ? Number(summary.failed || 0) : 0;
+          showToast(`失效 Token 清理完成：删除 ${deleted}，失败 ${failed}`, failed > 0 ? 'warning' : 'success');
+          currentBatchTaskId = null;
+          BatchSSE.close(batchEventSource);
+          batchEventSource = null;
+          if (btn) btn.disabled = false;
+          setActionButtonsState();
+        } else if (msg.type === 'cancelled') {
+          finishBatchProcess(true, { silent: true });
+          showToast('已终止失效 Token 清理任务', 'info');
+          currentBatchTaskId = null;
+          BatchSSE.close(batchEventSource);
+          batchEventSource = null;
+          if (btn) btn.disabled = false;
+          setActionButtonsState();
+        } else if (msg.type === 'error') {
+          finishBatchProcess(true, { silent: true });
+          showToast(`失效 Token 清理失败：${msg.error || t('common.unknownError')}`, 'error');
+          currentBatchTaskId = null;
+          BatchSSE.close(batchEventSource);
+          batchEventSource = null;
+          if (btn) btn.disabled = false;
+          setActionButtonsState();
+        }
+      },
+      onError: () => {
+        finishBatchProcess(true, { silent: true });
+        showToast(t('common.connectionInterrupted'), 'error');
+        currentBatchTaskId = null;
+        BatchSSE.close(batchEventSource);
+        batchEventSource = null;
+        if (btn) btn.disabled = false;
+        setActionButtonsState();
+      }
+    });
+  } catch (e) {
+    finishBatchProcess(true, { silent: true });
+    showToast(`启动清理失败：${e.message || t('common.requestFailed')}`, 'error');
+    currentBatchTaskId = null;
+    if (btn) btn.disabled = false;
+    setActionButtonsState();
+  }
+}
+
 function updateBatchProgress() {
   const container = byId('batch-progress');
   const text = byId('batch-progress-text');
@@ -1357,15 +1492,17 @@ async function startBatchDelete() {
   updateBatchProgress();
   setActionButtonsState();
 
+  const previous = [...flatTokens];
   try {
     const toRemove = new Set(batchQueue);
     flatTokens = flatTokens.filter(t => !toRemove.has(t.token));
-    await syncToServer();
+    await syncToServer({ strict: true });
     batchProcessed = batchTotal;
     updateBatchProgress();
     finishBatchProcess(false, { silent: true });
     showToast(t('token.deleteDone'), 'success');
   } catch (e) {
+    flatTokens = previous;
     finishBatchProcess(true, { silent: true });
     showToast(t('common.deleteFailed'), 'error');
   }

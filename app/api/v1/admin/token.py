@@ -17,8 +17,10 @@ from app.services.reverse.set_birth import SetBirthReverse
 from app.services.reverse.nsfw_mgmt import NsfwMgmtReverse
 from app.services.reverse.utils.session import ResettableSession
 from app.core.exceptions import UpstreamException
+from app.services.token.models import TokenStatus
 from app.core.config import get_config
 from app.services.token.manager import get_token_manager
+from app.core.batch import run_batch
 
 router = APIRouter()
 
@@ -393,6 +395,13 @@ async def diagnose_nsfw(data: dict):
             return "上游服务异常，请稍后重试"
         return ""
 
+    def _is_email_domain_rejected(err: UpstreamException) -> bool:
+        details = err.details if isinstance(err.details, dict) else {}
+        grpc_message = str(details.get("grpc_message") or "").lower()
+        message = str(err).lower()
+        marker = "email-domain-rejected"
+        return marker in grpc_message or marker in message
+
     async with ResettableSession(impersonate=browser) as session:
         try:
             await AcceptTosReverse.request(session, token)
@@ -446,6 +455,10 @@ async def diagnose_nsfw(data: dict):
         except UpstreamException as e:
             status = _extract_status(e)
             reason = _network_hint(status)
+            is_banned = _is_email_domain_rejected(e)
+            if is_banned:
+                reason = "账号邮箱域名被平台拒绝，按禁用处理"
+                await mgr.mark_banned(token, "email_domain_rejected")
             steps.append(
                 {
                     "step": "nsfw_mgmt",
@@ -453,17 +466,238 @@ async def diagnose_nsfw(data: dict):
                     "status": status,
                     "error": str(e),
                     "hint": reason,
+                    "is_banned": is_banned,
                 }
             )
             if status == 401:
                 await mgr.record_fail(token, status, "diagnose_nsfw_mgmt_auth_failed")
-            return {"status": "failed", "failed_step": "nsfw_mgmt", "steps": steps}
+            return {
+                "status": "failed",
+                "failed_step": "nsfw_mgmt",
+                "steps": steps,
+                "is_banned": is_banned,
+            }
 
     return {
         "status": "success",
         "failed_step": None,
         "steps": steps,
+        "is_banned": False,
         "message": "NSFW diagnose completed",
+    }
+
+
+@router.post("/tokens/test", dependencies=[Depends(verify_app_key)])
+async def test_token_connectivity(data: dict):
+    """测试 token 连通性，并在命中明确封禁特征时标记为 expired。"""
+    token = ""
+    if isinstance(data, dict) and isinstance(data.get("token"), str):
+        token = data.get("token", "").strip()
+
+    if not token:
+        raise HTTPException(status_code=400, detail="No token provided")
+
+    mgr = await get_token_manager()
+    browser = get_config("proxy.browser")
+
+    def _extract_status(err: UpstreamException) -> int:
+        if isinstance(err.details, dict) and isinstance(err.details.get("status"), int):
+            return err.details["status"]
+        return int(getattr(err, "status_code", 502) or 502)
+
+    def _is_email_domain_rejected(err: UpstreamException) -> bool:
+        details = err.details if isinstance(err.details, dict) else {}
+        grpc_message = str(details.get("grpc_message") or "").lower()
+        message = str(err).lower()
+        marker = "email-domain-rejected"
+        return marker in grpc_message or marker in message
+
+    steps = []
+    is_banned = False
+    banned_reason = None
+
+    async with ResettableSession(impersonate=browser) as session:
+        try:
+            await AcceptTosReverse.request(session, token)
+            steps.append({"step": "accept_tos", "ok": True, "status": 200})
+        except UpstreamException as e:
+            status = _extract_status(e)
+            if status == 401:
+                await mgr.record_fail(token, status, "token_test_tos_auth_failed")
+            return {
+                "status": "failed",
+                "step": "accept_tos",
+                "is_connected": False,
+                "is_banned": False,
+                "http_status": status,
+                "error": str(e),
+                "steps": steps,
+            }
+
+        try:
+            await SetBirthReverse.request(session, token)
+            steps.append({"step": "set_birth", "ok": True, "status": 200})
+        except UpstreamException as e:
+            status = _extract_status(e)
+            if status == 401:
+                await mgr.record_fail(token, status, "token_test_set_birth_auth_failed")
+            return {
+                "status": "failed",
+                "step": "set_birth",
+                "is_connected": False,
+                "is_banned": False,
+                "http_status": status,
+                "error": str(e),
+                "steps": steps,
+            }
+
+        try:
+            grpc_status = await NsfwMgmtReverse.request(session, token)
+            steps.append(
+                {
+                    "step": "nsfw_mgmt",
+                    "ok": grpc_status.code in (-1, 0),
+                    "status": 200,
+                    "grpc_status": grpc_status.code,
+                    "grpc_message": grpc_status.message or None,
+                }
+            )
+            is_connected = grpc_status.code in (-1, 0)
+        except UpstreamException as e:
+            status = _extract_status(e)
+            is_connected = False
+            is_banned = _is_email_domain_rejected(e)
+            if status == 401:
+                await mgr.record_fail(token, status, "token_test_nsfw_mgmt_auth_failed")
+            if is_banned:
+                banned_reason = "email_domain_rejected"
+                await mgr.mark_banned(token, banned_reason)
+            return {
+                "status": "failed",
+                "step": "nsfw_mgmt",
+                "is_connected": is_connected,
+                "is_banned": is_banned,
+                "banned_reason": banned_reason,
+                "http_status": status,
+                "error": str(e),
+                "steps": steps,
+            }
+
+    token_status = None
+    token_pool = mgr.get_pool_name_for_token(token)
+    if token_pool and token_pool in mgr.pools:
+        token_info = mgr.pools[token_pool].get(token.removeprefix("sso="))
+        if token_info:
+            token_status = token_info.status
+
+    return {
+        "status": "success" if is_connected else "failed",
+        "is_connected": is_connected,
+        "is_banned": is_banned,
+        "banned_reason": banned_reason,
+        "token_status": token_status or TokenStatus.ACTIVE,
+        "steps": steps,
+    }
+
+
+@router.post("/tokens/cleanup-invalid/async", dependencies=[Depends(verify_app_key)])
+async def cleanup_invalid_tokens_async(data: dict):
+    """分批自动删除失效 token（状态为 disabled/expired）。"""
+    mgr = await get_token_manager()
+
+    pool_names = []
+    if isinstance(data, dict) and isinstance(data.get("pools"), list):
+        pool_names = [str(x).strip() for x in data.get("pools", []) if str(x).strip()]
+
+    delete_statuses = {TokenStatus.DISABLED, TokenStatus.EXPIRED}
+    candidates: list[tuple[str, str]] = []
+    for pool_name, pool in mgr.pools.items():
+        if pool_names and pool_name not in pool_names:
+            continue
+        for info in pool.list():
+            if info.status in delete_statuses:
+                candidates.append((pool_name, info.token))
+
+    if not candidates:
+        return {
+            "status": "success",
+            "task_id": None,
+            "total": 0,
+            "message": "No invalid tokens to delete",
+        }
+
+    # 二次去重：同 token 在异常情况下仅删一次
+    seen = set()
+    unique_candidates: list[tuple[str, str]] = []
+    for pool_name, token in candidates:
+        key = token.removeprefix("sso=")
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_candidates.append((pool_name, token))
+
+    task = create_task(len(unique_candidates))
+
+    async def _run():
+        try:
+            items = [t for _, t in unique_candidates]
+
+            async def _delete_one(token: str):
+                ok = await mgr.remove(token)
+                return {"deleted": bool(ok)}
+
+            async def _on_item(item: str, res: dict):
+                task.record(bool(res.get("ok") and (res.get("data") or {}).get("deleted")))
+
+            raw_results = await run_batch(
+                items,
+                _delete_one,
+                batch_size=int(get_config("token.cleanup_batch_size", 50) or 50),
+                on_item=_on_item,
+                should_cancel=lambda: task.cancelled,
+            )
+
+            if task.cancelled:
+                task.finish_cancelled()
+                return
+
+            deleted = []
+            failed = []
+            for token, res in raw_results.items():
+                if res.get("ok") and (res.get("data") or {}).get("deleted"):
+                    deleted.append(token)
+                else:
+                    failed.append(
+                        {
+                            "token": token,
+                            "error": res.get("error") or "remove_failed",
+                        }
+                    )
+
+            result = {
+                "status": "success",
+                "summary": {
+                    "total": len(items),
+                    "deleted": len(deleted),
+                    "failed": len(failed),
+                },
+                "deleted": deleted,
+                "failed": failed,
+            }
+            task.finish(result)
+        except Exception as e:
+            task.fail_task(str(e))
+        finally:
+            import asyncio
+            asyncio.create_task(expire_task(task.id, 300))
+
+    import asyncio
+    asyncio.create_task(_run())
+
+    return {
+        "status": "success",
+        "task_id": task.id,
+        "total": len(unique_candidates),
     }
 
 

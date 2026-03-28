@@ -734,6 +734,28 @@ class TokenManager:
         logger.warning(f"Token {raw_token[:10]}...: not found for rate limit marking")
         return False
 
+    async def mark_banned(self, token_str: str, reason: str = "") -> bool:
+        """将 Token 标记为完全失效（DISABLED），避免被自动恢复。"""
+        raw_token = token_str.removeprefix("sso=")
+
+        for pool in self.pools.values():
+            token = pool.get(raw_token)
+            if token:
+                token.status = TokenStatus.DISABLED
+                token.quota = 0
+                token.last_fail_at = int(datetime.now().timestamp() * 1000)
+                token.last_fail_reason = reason or "token_banned"
+                token.fail_count = max(token.fail_count, 1)
+                logger.warning(
+                    f"Token {raw_token[:10]}...: marked as banned/disabled - {token.last_fail_reason}"
+                )
+                self._track_token_change(token, pool.name, "state")
+                self._schedule_save()
+                return True
+
+        logger.warning(f"Token {raw_token[:10]}...: not found for banned marking")
+        return False
+
     # ========== 管理功能 ==========
 
     async def add(self, token: str, pool_name: str = "ssoBasic") -> bool:
